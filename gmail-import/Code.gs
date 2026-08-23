@@ -49,6 +49,14 @@ const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 // 続きから処理される（強制終了で中途半端に切れるより、綺麗に切り上げる方が安全）。
 const MAX_RUNTIME_MS = 4.5 * 60 * 1000;
 
+// 同じ金額・日付の明細が既にあるとき、「同じ購入の別チャネル通知」（例: メルペイ
+// 自身の通知とPayPal/EXIMBAYのような決済代行会社からの通知）と「たまたま同額・
+// 同日になった別々の購入」を見分けるための時間窓。カード会社をまたぐ二重通知は
+// 同じ決済イベントから同時に発生するのでメールの受信時刻がほぼ同時になる一方、
+// 別々の買い物は数分以上ずれることが多い（実測: 同一購入の2通は0分差、別々の
+// 購入は4分差だった）ので、その間を取って2分以内を「同一購入」とみなす。
+const SAME_EVENT_WINDOW_MS = 2 * 60 * 1000;
+
 function checkCardEmails() {
   const startedAt = new Date();
   let importedCount = 0;
@@ -122,11 +130,20 @@ function checkCardEmails() {
           // 会社自体からの通知のように、別々のサービスから2通メールが来ることがある。
           // どちらも内容として正しいため通常のメッセージID単位の重複防止（同じメールを
           // 2回処理しない）では防げない。ただし「金額・日付が一致」というだけで弾くと、
-          // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう
-          // ので、既存の明細と「カードまで一致」した場合だけ、別サービス経由の重複通知と
-          // みなす（カードが違う＝ゲートウェイ名など別チャネルからの重複の可能性）。
+          // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう。
+          // 「カードまで一致」も判断材料としては弱く（同じ購入の2通も、たまたまの別購入
+          // も、どちらも同じカードに解決されうる）、実際に受信時刻がほぼ同時（数分以内）
+          // かどうかで見分ける。同じ決済イベントから同時に発生する別チャネル通知は受信が
+          // ほぼ同時になるが、別々の買い物は数分以上ずれることが多いため。
           const duplicate = findDuplicateTransaction_(accessToken, amount, date);
-          if (duplicate && duplicate.cardId !== cardId) {
+          const messageTime = message.getDate().getTime();
+          const existingTime = duplicate && duplicate.gmailReceivedAt ? new Date(duplicate.gmailReceivedAt).getTime() : null;
+          // 受信時刻の記録が無い明細（手動入力・スクリーンショット取込・本機能追加前の
+          // Gmail取込）は比較しようがないので、既に記録済みとみなして安全側に倒す
+          // （重複作成はしない）。記録があれば、時間窓内かどうかで判定する。
+          const isSameEvent = !!duplicate && (existingTime === null || Math.abs(messageTime - existingTime) <= SAME_EVENT_WINDOW_MS);
+
+          if (isSameEvent) {
             // カードと店名・カテゴリは別々に決める。2通のメールは「先に処理された方が
             // 勝ち」で丸ごと上書きすると、片方にしか無い有用な情報（例: 決済代行会社の
             // 領収書にしか店名が書かれていない）が消えてしまうことがあるため。
@@ -144,13 +161,24 @@ function checkCardEmails() {
             const useExisting = existingIsKnownMerchant && !known;
             const patchMemo = useExisting ? duplicate.memo : finalName;
             const patchCategory = useExisting ? (duplicate.category || finalCategory) : finalCategory;
+            // 受信時刻は、次に3通目が来たときの比較の基準がぶれないよう、より早い方を残す。
+            const patchReceivedAt = existingTime !== null
+              ? new Date(Math.min(existingTime, messageTime)).toISOString()
+              : new Date(messageTime).toISOString();
 
             if (finalCardId === duplicate.cardId && patchMemo === duplicate.memo && patchCategory === duplicate.category) {
               console.log(`重複のためスキップ: ${date} ¥${amount} (${issuerName}/${merchant})`);
             } else {
               console.log(`重複を修正: ${date} ¥${amount} → カード付け替え/店名補完（${patchMemo}）`);
               firestoreRequest_(accessToken, 'patch', duplicate.url, {
-                fields: toFirestoreFields_({ cardId: finalCardId, amount, date, category: patchCategory, memo: patchMemo }),
+                fields: toFirestoreFields_({
+                  cardId: finalCardId,
+                  amount,
+                  date,
+                  category: patchCategory,
+                  memo: patchMemo,
+                  gmailReceivedAt: patchReceivedAt,
+                }),
               });
             }
             return;
@@ -164,6 +192,7 @@ function checkCardEmails() {
             date,
             category: finalCategory,
             memo: finalName,
+            gmailReceivedAt: new Date(messageTime).toISOString(),
           });
           importedCount += 1;
         } catch (err) {
@@ -561,10 +590,10 @@ function createTransaction_(accessToken, id, tx) {
  * 自体からの通知のように、別々のサービスから正しい内容の通知メールが2通届く
  * ことがあり、その場合はメッセージID単位の重複防止（同じメールを2回処理しない）
  * だけでは防げない。
- * 戻り値: 見つからなければ null。見つかれば { url, cardId }
+ * 戻り値: 見つからなければ null。見つかれば { url, cardId, memo, category, gmailReceivedAt }
  * （urlはそのままPATCHで上書きできるドキュメントの完全なパス）。
- * カードまで一致しているかは呼び出し元で判断する（同じカードでの同額別購入と
- * 区別するため）。
+ * 「同じ購入の別チャネル通知」か「同額・同日のたまたま別の購入」かは、
+ * gmailReceivedAt（Gmail取込が書き込むメール受信時刻）を使って呼び出し元で判断する。
  */
 function findDuplicateTransaction_(accessToken, amount, date) {
   try {
@@ -604,6 +633,7 @@ function findDuplicateTransaction_(accessToken, amount, date) {
       cardId: (fields.cardId && fields.cardId.stringValue) || null,
       memo: (fields.memo && fields.memo.stringValue) || null,
       category: (fields.category && fields.category.stringValue) || null,
+      gmailReceivedAt: (fields.gmailReceivedAt && fields.gmailReceivedAt.stringValue) || null,
     };
   } catch (e) {
     console.warn('重複チェックに失敗しました（チェックなしで続行します）: ' + e);
