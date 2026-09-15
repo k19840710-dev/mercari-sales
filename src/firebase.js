@@ -47,6 +47,11 @@ export const getCardsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'user
 export const getTransactionsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'transactions');
 export const cardDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'cards', id);
 export const transactionDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'transactions', id);
+// Gmail自動取り込み（Apps Script）が、確信を持てなかった利用通知メールを保留する場所。
+// 未登録カードの自動作成や、判定が曖昧な明細の自動登録はしない方針のため、
+// ここに一旦溜めて、アプリ側でユーザーが内容を確認してから登録する。
+export const getPendingImportsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'pendingImports');
+export const pendingImportDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'pendingImports', id);
 // Gmail自動取り込み（Apps Script）の実行状況。アプリ側は読み取り専用で表示するだけ。
 export const gmailImportStatusDocRef = (uid) => doc(db, 'artifacts', APP_ID, 'users', uid, 'settings', 'gmailImportStatus');
 

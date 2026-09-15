@@ -3,12 +3,28 @@
  * ============================================================
  *
  * Gmail に届く「ご利用のお知らせ」「利用速報」等のメールを定期的にチェックし、
- * AI（Gemini）にメール本文を解析させて、カード家計簿アプリの Firestore に
- * 直接、明細として書き込みます。アプリを開かなくても自動で明細が増えます。
+ * カード家計簿アプリの Firestore に直接、明細として書き込みます。
+ * アプリを開かなくても自動で明細が増えます。
  *
  * カード会社ごとの解析ロジックをコードで用意する必要はありません。件名によるキーワード
  * 絞り込みもしていないので、新しいカード会社が増えてもコードを直す必要は一切ありません
- * （直近7日・未処理のメールは全部AIに「購入確定通知かどうか」を判定させています）。
+ * （直近7日・未処理のメールは全部AIに判定させています）。
+ *
+ * 【設計方針】
+ * AI（Gemini）の役割は「メールからの情報抽出」だけに限定し、実際に家計簿へ
+ * 自動登録してよいかどうかの最終判断は、このコード側（evaluateForImport_）が
+ * 複数のルールをすべて満たした場合のみ行います。
+ *   1. 利用確定の通知だと十分な根拠がある（AIの確信度が high、かつ金額・日付・
+ *      利用先・カード番号下4桁のうち複数が確認でき、「ご利用」等の通知特有の
+ *      文言が本文にある）
+ *   2. すでにアプリに登録されているカード（カード番号下4桁、またはカード名が
+ *      完全一致）だと判定できる ―― 一致しない場合、新しいカードを勝手に
+ *      作成することは絶対にしません
+ *   3. 同一の明細がまだ登録されていない（重複ではない）
+ * これらを1つでも満たせない場合は、「多少取りこぼす」方を選び、自動登録は
+ * せず「確認待ち（pendingImports）」としてFirestoreに保存します。ユーザーは
+ * アプリ側の確認待ち画面から、既存カードに紐付ける／新しいカードとして追加する／
+ * 無視する、のいずれかを選べます。
  *
  * セットアップ手順は README.md を参照してください。
  * このファイルの中で編集が必要な箇所は「▼設定」の見出しがついた部分だけです。
@@ -60,6 +76,7 @@ const SAME_EVENT_WINDOW_MS = 2 * 60 * 1000;
 function checkCardEmails() {
   const startedAt = new Date();
   let importedCount = 0;
+  let pendingCount = 0;
   let lastError = null;
   let timeUp = false;
 
@@ -67,16 +84,11 @@ function checkCardEmails() {
     const accessToken = getFirestoreAccessToken_();
     const geminiKey = getGeminiApiKey_();
     const label = getOrCreateLabel_(PROCESSED_LABEL_NAME);
-    // AIに「これは既存のどのカードと同じ実体か」を判断させるための材料。
-    // 例: メルペイは「メルカード」「iD決済」「バーチャルMastercard」など
-    // メール表現がバラバラでも実体は同じアカウントなので、既存名を渡すことで
-    // AI自身に同一判定させ、毎回違う名前で重複登録されるのを防ぐ。
-    // { カード名: カードID } のマップで持つことで、アプリ側でカード名を後から
-    // 変更されても（例:「メルカード」→「マイカード」）正しいIDに追従できる
-    // （名前からIDを毎回作り直す方式だと、リネームで紐付けが外れてしまう）。
-    const cardCache = getExistingCardsCache_(accessToken);
-    const existingCardNames = Object.keys(cardCache);
-    console.log(`登録済みカード: ${existingCardNames.join('、') || '(なし)'}`);
+    // 登録済みカード一覧（id・名前・カード番号下4桁）。新しいカードはここには
+    // 絶対に追加しない ―― AIの抽出結果がこの一覧のどれかと一致した場合だけ、
+    // その明細として自動登録する（一致しなければ確認待ちへ）。
+    const existingCards = getExistingCards_(accessToken);
+    console.log(`登録済みカード: ${existingCards.map((c) => `${c.name}(下4桁:${c.last4 || '不明'})`).join('、') || '(なし)'}`);
 
     const query = `-label:"${PROCESSED_LABEL_NAME}" newer_than:7d`;
     const threads = GmailApp.search(query, 0, 50);
@@ -100,79 +112,103 @@ function checkCardEmails() {
         const subject = message.getSubject() || '';
         try {
           const body = message.getPlainBody();
-          const result = analyzeEmailWithAi_(geminiKey, subject, body, existingCardNames, message.getDate());
+          // AIの役割は抽出だけ。登録してよいかどうかは evaluateForImport_ が判断する。
+          const extracted = extractEmailInfo_(geminiKey, subject, body, existingCards, message.getDate());
           // 無料枠のレート制限（1分あたり◯リクエスト）に極力引っかからないよう、
           // 判定1回ごとに少し間隔を空ける。
           Utilities.sleep(3200);
 
-          if (result.status === 'not_purchase') {
-            console.log(`AI判定: 購入確定通知ではない → スキップ: "${subject}"`);
+          if (extracted.status === 'not_purchase') {
+            console.log(`AI判定: 利用確定通知ではない → スキップ: "${subject}"`);
             return; // このメール自体は「処理済み」として扱ってよい（threadHadFailureにはしない）
           }
-          if (result.status === 'error') {
-            console.warn(`AI解析エラー: "${subject}" → ${result.error}`);
+          if (extracted.status === 'error') {
+            console.warn(`AI解析エラー: "${subject}" → ${extracted.error}`);
             threadHadFailure = true; // 次回また拾い直す
             return;
           }
 
-          const { issuerName, merchant, amount, date } = result.data;
+          const decision = evaluateForImport_(extracted.data, subject, body, existingCards);
+          const messageDate = message.getDate();
 
-          const cardId = ensureCardExists_(accessToken, cardCache, issuerName);
+          if (decision.action === 'pending') {
+            // 自動登録の条件を満たさなかった（確信度不足／必須項目不足／登録済み
+            // カードと一致しない、のいずれか）。削除はせず確認待ちに保存し、
+            // アプリ側でユーザーに判断してもらう。
+            upsertPendingImport_(accessToken, `p-gmail-${message.getId()}`, {
+              subject,
+              from: message.getFrom() || '',
+              receivedAt: messageDate.toISOString(),
+              amount: extracted.data.amount,
+              date: extracted.data.date,
+              merchant: extracted.data.merchant,
+              issuerNameGuess: extracted.data.issuerName,
+              last4Guess: extracted.data.last4,
+              category: extracted.data.category,
+              reason: decision.reason,
+              status: 'pending',
+              createdAt: new Date().toISOString(),
+            });
+            console.log(`確認待ちに追加: "${subject}" → ${decision.reason}`);
+            pendingCount += 1;
+            return;
+          }
+
+          // ここに来るのは decision.action === 'register'（自動登録OK）の場合のみ。
+          // decision.card は、AIの抽出結果（カード番号下4桁 or カード名の完全一致）が
+          // 実際に登録済みのカードと一致した結果であり、新規作成されたものではない。
+          const { issuerName, merchant, amount, date } = extracted.data;
+          const cardId = decision.card.id;
 
           // 「コミックシーモア　サクヒン　ポイント」のような余計な文字を削り、知っている
           // 店名なら正式名称＋カテゴリに寄せる（src/App.jsxのOCR取込と同じ表記に揃うので、
           // ここを優先する）。知らない店名だけ、AI自身が返した店名・カテゴリを使う。
           const known = findKnownMerchant_(merchant);
-          const finalName = known ? known.name : (merchant || issuerName);
-          const finalCategory = known ? known.category : (result.data.category || guessCategory_(merchant));
+          const finalName = known ? known.name : (merchant || issuerName || decision.card.name);
+          const finalCategory = known ? known.category : (extracted.data.category || guessCategory_(merchant));
 
           // 同じ支払いについて、メルペイ経由の通知とEXIMBAY/PayPalのような決済代行
           // 会社自体からの通知のように、別々のサービスから2通メールが来ることがある。
           // どちらも内容として正しいため通常のメッセージID単位の重複防止（同じメールを
           // 2回処理しない）では防げない。ただし「金額・日付が一致」というだけで弾くと、
-          // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう。
-          // 「カードまで一致」も判断材料としては弱く（同じ購入の2通も、たまたまの別購入
-          // も、どちらも同じカードに解決されうる）、実際に受信時刻がほぼ同時（数分以内）
-          // かどうかで見分ける。同じ決済イベントから同時に発生する別チャネル通知は受信が
-          // ほぼ同時になるが、別々の買い物は数分以上ずれることが多いため。
+          // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう
+          // ので、実際に受信時刻がほぼ同時（数分以内）かどうかで見分ける。同じ決済
+          // イベントから同時に発生する別チャネル通知は受信がほぼ同時になるが、別々の
+          // 買い物は数分以上ずれることが多いため。
           const duplicate = findDuplicateTransaction_(accessToken, amount, date);
-          const messageTime = message.getDate().getTime();
+          const messageTime = messageDate.getTime();
           const existingTime = duplicate && duplicate.gmailReceivedAt ? new Date(duplicate.gmailReceivedAt).getTime() : null;
-          // 受信時刻の記録が無い明細（手動入力・スクリーンショット取込・本機能追加前の
-          // Gmail取込）は比較しようがないので、既に記録済みとみなして安全側に倒す
-          // （重複作成はしない）。記録があれば、時間窓内かどうかで判定する。
+          // 受信時刻の記録が無い明細（手動入力・アプリ内OCR取込・確認待ちからの
+          // 手動登録・本機能追加前のGmail取込）は比較しようがないので、既に
+          // 記録済みとみなして安全側に倒す（重複作成はしない）。
           const isSameEvent = !!duplicate && (existingTime === null || Math.abs(messageTime - existingTime) <= SAME_EVENT_WINDOW_MS);
 
           if (isSameEvent) {
-            // カードと店名・カテゴリは別々に決める。2通のメールは「先に処理された方が
-            // 勝ち」で丸ごと上書きすると、片方にしか無い有用な情報（例: 決済代行会社の
-            // 領収書にしか店名が書かれていない）が消えてしまうことがあるため。
-            //
-            // カード: 今回の会社名が、このスクリプト実行前から登録済みの実在カードで
-            // あれば、決済代行会社名などで先に作られた曖昧なカードより優先する。
-            // そうでなければ（今回も既存も実在カードでない場合は）既存の割り当てを保つ。
-            const isKnownRealCard = existingCardNames.includes(issuerName);
-            const finalCardId = isKnownRealCard ? cardId : duplicate.cardId;
-
-            // 店名・カテゴリ: 知っている店名リスト（KNOWN_MERCHANTS_）に一致する、
-            // より具体的な方を採用する。今回・既存のどちらも一致しない/両方一致するなら
-            // 今回の内容を使う（判断材料が無ければ最新の解析結果を信じる）。
+            // 店名・カテゴリは、知っている店名リスト（KNOWN_MERCHANTS_）に一致する、
+            // より具体的な方を採用する（例: 決済代行会社の領収書にしか店名が書かれて
+            // いないことがあるため、先に処理された方を丸ごと勝ちにはしない）。
             const existingIsKnownMerchant = !!(duplicate.memo && findKnownMerchant_(duplicate.memo));
             const useExisting = existingIsKnownMerchant && !known;
             const patchMemo = useExisting ? duplicate.memo : finalName;
             const patchCategory = useExisting ? (duplicate.category || finalCategory) : finalCategory;
-            // 受信時刻は、次に3通目が来たときの比較の基準がぶれないよう、より早い方を残す。
             const patchReceivedAt = existingTime !== null
               ? new Date(Math.min(existingTime, messageTime)).toISOString()
               : new Date(messageTime).toISOString();
 
-            if (finalCardId === duplicate.cardId && patchMemo === duplicate.memo && patchCategory === duplicate.category) {
+            // カードは、今回・既存どちらも「登録済みカードと一致」した結果なので、
+            // 一致しない場合に無理に付け替えると誤りのリスクがある。カードは既存の
+            // ままにし、店名・カテゴリの補完だけ行う。
+            if (duplicate.cardId && duplicate.cardId !== cardId) {
+              console.warn(`重複通知だがカードの判定が一致しません（既存: ${duplicate.cardId} / 今回: ${cardId}）。カードはそのままに、店名・カテゴリのみ補完します。`);
+            }
+
+            if (patchMemo === duplicate.memo && patchCategory === duplicate.category) {
               console.log(`重複のためスキップ: ${date} ¥${amount} (${issuerName}/${merchant})`);
             } else {
-              console.log(`重複を修正: ${date} ¥${amount} → カード付け替え/店名補完（${patchMemo}）`);
+              console.log(`重複を補完: ${date} ¥${amount} → 店名「${patchMemo}」`);
               firestoreRequest_(accessToken, 'patch', duplicate.url, {
                 fields: toFirestoreFields_({
-                  cardId: finalCardId,
+                  cardId: duplicate.cardId || cardId,
                   amount,
                   date,
                   category: patchCategory,
@@ -212,6 +248,7 @@ function checkCardEmails() {
     updateStatus_(accessToken, {
       lastCheckedAt: startedAt.toISOString(),
       importedLastRun: importedCount,
+      pendingLastRun: pendingCount,
       ok: !lastError,
       error: lastError,
     });
@@ -222,6 +259,7 @@ function checkCardEmails() {
       updateStatus_(accessToken, {
         lastCheckedAt: startedAt.toISOString(),
         importedLastRun: importedCount,
+        pendingLastRun: pendingCount,
         ok: false,
         error: String(err),
       });
@@ -276,35 +314,45 @@ function fetchGeminiWithRetry_(url, payload, attempt) {
 }
 
 /**
- * メール本文をAIに渡し、「購入確定の利用通知かどうか」と、そうであれば
- * カード会社名・店名・金額・利用日を抽出してもらう。
+ * メール本文をAIに渡し、「利用確定の通知メールかどうか」と、そうであれば
+ * 関連情報（カード会社名・カード番号下4桁・店名・金額・利用日・確信度）を
+ * 抽出してもらう。ここでは抽出だけを行い、実際に家計簿へ登録してよいかどうかの
+ * 判断は一切しない（evaluateForImport_ に分離している）。
  * 戻り値: { status: 'ok', data: {...} } / { status: 'not_purchase' } / { status: 'error', error }
  */
-function analyzeEmailWithAi_(apiKey, subject, body, existingCardNames, messageDate) {
+function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
   const truncatedBody = String(body || '').slice(0, 4000);
   const currentYear = (messageDate instanceof Date) ? messageDate.getFullYear() : new Date().getFullYear();
 
-  const cardHint = (existingCardNames && existingCardNames.length)
+  const cardHint = (existingCards && existingCards.length)
     ? [
       '',
-      `既に登録されているカード名: ${existingCardNames.join('、')}`,
+      '参考: すでに登録されているカード（このメールがどれと一致するかはシステム側で',
+      '別途判定するので、ここでは参考情報として使ってください）:',
+      existingCards.map((c) => `- ${c.name}${c.last4 ? `（下4桁: ${c.last4}）` : ''}`).join('\n'),
       'このメールの決済が、上のどれかと実体として同じカード・決済アカウントであれば',
       '（例えば同じ○○ペイのアカウントから、メルカード決済・iD決済・バーチャルカード決済など',
       '複数の見た目で通知が来ている場合は全部同じ実体）、issuer_nameは必ずその登録済みの',
-      '名前をそのまま（一字一句）使ってください。表記が違うだけで実体が同じなら新しい名前を',
-      '作らないこと。どれとも異なる、本当に初めて見るカード会社・決済サービスの場合だけ',
-      '新しい名前をissuer_nameにしてください。',
+      '名前をそのまま（一字一句）使ってください。どれとも異なる場合は、メールに書かれている',
+      'カード会社・決済サービス名をそのまま抽出してください（新しいカードを作る必要はありません）。',
     ].join('\n')
     : '';
 
   const prompt = [
-    'あなたはクレジットカードの利用通知メールを解析するアシスタントです。',
-    '以下のメールが「カードで買い物・決済をした際に届く、利用確定の通知メール」かどうか判定してください。',
-    '本人確認（ワンタイムパスワード等）、ポイント失効案内、キャンペーン、広告、請求書（月次まとめ）、',
-    'ログイン通知などは「利用確定の通知」ではないので is_purchase_notification は false にしてください。',
+    'あなたはメールを解析するアシスタントです。抽出だけを行い、実際に家計簿へ',
+    '登録するかどうかの判断はこの後システム側で行うので、あなたは判断しません。',
+    '少しでも自信が持てない場合は、無理に決めつけず confidence を low にしてください。',
     '',
-    '利用確定の通知メールであれば、以下も抽出してください:',
+    '以下のメールが「カードで買い物・決済をした際に届く、利用確定の通知メール」かどうか判定してください。',
+    '次のようなメールは is_purchase_notification を false にしてください:',
+    '本人確認（ワンタイムパスワード等）、ポイント付与・失効案内、キャンペーン・広告、',
+    '請求額確定・引き落とし案内（月次まとめ）、カード更新案内、メンテナンス案内、ログイン通知、',
+    'その他「今この場でカードを使って買い物をした」ことの通知ではないメール。',
+    '',
+    '利用確定の通知メールだと判断した場合は、以下も抽出してください（わからない項目はnull）:',
+    '- confidence: 判定・抽出内容にどれだけ自信があるか（high/medium/lowのいずれか）',
     '- issuer_name: カード会社・決済サービス名（例: 「メルカード」「三井住友カード」「楽天カード」など。件名や本文、署名から判断）',
+    '- last4: カード番号の下4桁（半角数字4桁。本文に記載が無ければnull。「＊＊＊＊1234」等の末尾4桁も対象）',
     '- merchant: 利用した店舗・サービス名。決済代行会社の識別子（「SQ*」「AMZ*」等）や余計な記号は除いて、一般的な店名にしてください（例:「ＳＱ＊スターバックスコーヒー」→「スターバックス」）',
     '- category: 利用内容から最も適したものを1つ選択（food/daily/entertainment/transport/communication/subscription/investment/travel/beauty/procurement/social/otherのいずれか。Netflix・Spotify等の定額サービスはsubscription、証券会社・積立・暗号資産などはinvestment）',
     '- amount: 利用金額（円。数字のみ、カンマなし）',
@@ -324,7 +372,9 @@ function analyzeEmailWithAi_(apiKey, subject, body, existingCardNames, messageDa
         type: 'OBJECT',
         properties: {
           is_purchase_notification: { type: 'BOOLEAN' },
+          confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] },
           issuer_name: { type: 'STRING' },
+          last4: { type: 'STRING' },
           merchant: { type: 'STRING' },
           category: {
             type: 'STRING',
@@ -360,22 +410,76 @@ function analyzeEmailWithAi_(apiKey, subject, body, existingCardNames, messageDa
     return { status: 'not_purchase' };
   }
 
+  // ここでは緩く受け取るだけで、登録可否の厳密な判定はしない
+  // （必須項目が欠けていても、そのまま確認待ちに回るだけで済むようにするため）。
   const amount = Number(parsed.amount);
-  const dateOk = /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || ''));
-  if (!parsed.issuer_name || !parsed.merchant || !Number.isFinite(amount) || amount <= 0 || !dateOk) {
-    return { status: 'error', error: `AIが購入通知と判定したが値が不完全: ${JSON.stringify(parsed)}` };
-  }
+  const last4 = String(parsed.last4 || '').trim();
 
   return {
     status: 'ok',
     data: {
-      issuerName: String(parsed.issuer_name).trim(),
-      merchant: String(parsed.merchant).trim(),
+      isPurchaseNotification: true,
+      confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
+      issuerName: parsed.issuer_name ? String(parsed.issuer_name).trim() : null,
+      last4: /^\d{4}$/.test(last4) ? last4 : null,
+      merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
       category: parsed.category || null,
-      amount,
-      date: parsed.date,
+      amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? parsed.date : null,
     },
   };
+}
+
+// メール本文に「利用確定の通知」特有の言い回しが含まれているかを、AIに頼らず
+// コード側で機械的にチェックする。AIの is_purchase_notification 判定への
+// 二重チェックとして使う（「複数の情報が確認できた場合のみ自動登録する」の一部）。
+const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用のお知らせ|利用速報|ご利用いただき|ご利用金額|カードのご利用|(の|で)(お)?支払いが?ありました|決済されました|決済が完了|お支払い(の)?確認|ショッピング利用)/;
+
+/**
+ * AIの抽出結果・本文の文言・登録済みカード一覧から、「自動登録してよいか／
+ * 確認待ちに回すか」を判定する（is_purchase_notification=falseの完全な
+ * スキップは、この関数を呼ぶ前に checkCardEmails 側で処理済み）。
+ * 登録するかどうかの最終判断はAIではなく、必ずこの関数（＝コード側）が行う。
+ *
+ * 登録してよいのは、次を "すべて" 満たした場合のみ:
+ *  - AIの確信度が high
+ *  - 金額・日付・利用先・カード番号下4桁のうち複数（3つ以上）が確認できる
+ *  - 本文に「ご利用」等の利用通知特有の文言がある
+ *  - カード番号下4桁、またはカード名が、登録済みのカードと完全に一致する
+ *    （一致しなければ絶対に新しいカードを作らない）
+ * 1つでも満たさなければ pending（確認待ち）。
+ */
+function evaluateForImport_(extracted, subject, body, existingCards) {
+  const { confidence, issuerName, last4, merchant, amount, date } = extracted;
+
+  const hasUsagePhrase = USAGE_PHRASE_PATTERN.test(`${subject}\n${body}`);
+  const signalsPresent = [amount, date, merchant, last4].filter((v) => v !== null && v !== undefined && v !== '').length;
+  const requiredFieldsOk = !!amount && !!date && signalsPresent >= 3 && hasUsagePhrase;
+  const confidenceOk = confidence === 'high';
+
+  // last4が'0000'などのプレースホルダーのカード（アプリ側でカード番号未入力のまま
+  // 登録した場合の初期値）は、誤って一致してしまわないよう突合の対象から除く。
+  const matchableCards = existingCards.filter((c) => c.last4 && c.last4 !== '0000');
+  let matchedCard = null;
+  if (last4) {
+    matchedCard = matchableCards.find((c) => c.last4 === last4) || null;
+  }
+  if (!matchedCard && issuerName) {
+    const normalizedIssuer = toComparableText_(issuerName);
+    matchedCard = existingCards.find((c) => toComparableText_(c.name) === normalizedIssuer) || null;
+  }
+
+  const reasons = [];
+  if (!requiredFieldsOk) reasons.push('金額・日付・利用先・カード番号などの情報が十分に確認できませんでした');
+  if (!confidenceOk) reasons.push('AIの確信度が十分ではありません');
+  if (!matchedCard) {
+    reasons.push(last4 ? `末尾4桁「${last4}」に一致する登録済みカードが見つかりません` : '登録済みカードのどれと一致するか判断できません');
+  }
+
+  if (reasons.length === 0) {
+    return { action: 'register', card: matchedCard };
+  }
+  return { action: 'pending', reason: reasons.join('。') };
 }
 
 // ============================================================
@@ -386,24 +490,6 @@ function analyzeEmailWithAi_(apiKey, subject, body, existingCardNames, messageDa
 // （アプリ側 src/App.jsx の toComparableText と同じ考え方）。
 function toComparableText_(str) {
   return String(str || '').normalize('NFKC').toLowerCase();
-}
-
-// 以前（カード会社ごとに手書きのルールがあった時代）は固定のcardIdで
-// 作成・管理していたカードたち。既にこのIDで実データが入っているユーザーの
-// カードと紐付け続けるための移行マップ。新しいカード会社はここに無くても、
-// 下のslugifyCardId_が自動でIDを作るので追記不要。
-const LEGACY_ISSUER_CARD_IDS = {
-  'メルカード': 'card-mercard',
-  '三井住友カード': 'card-smbc-nl',
-  'PayPayカード': 'card-paypay',
-};
-
-/** カード会社名からFirestoreの安全なドキュメントIDを作る（同じ会社名なら常に同じID） */
-function slugifyCardId_(issuerName) {
-  if (LEGACY_ISSUER_CARD_IDS[issuerName]) return LEGACY_ISSUER_CARD_IDS[issuerName];
-  const base = String(issuerName || 'card').trim();
-  const cleaned = base.replace(/[\/\s]+/g, '-').replace(/[^\p{L}\p{N}\-]/gu, '');
-  return 'card-gmail-' + (cleaned || 'unknown');
 }
 
 /**
@@ -642,86 +728,43 @@ function findDuplicateTransaction_(accessToken, amount, date) {
 }
 
 /**
- * 登録済みカードの { カード名: カードID } マップを取得する
- * （取得に失敗しても空オブジェクトにして続行）。
- * 名前からIDを毎回作り直す方式だと、アプリ側でカード名を後から変更された
- * 場合に紐付けが外れてしまうため、実際のドキュメントIDをそのまま使う。
+ * 登録済みカード一覧を { id, name, last4 } の配列で取得する
+ * （取得に失敗しても空配列にして続行 ―― その場合は何とも一致しなくなるので、
+ * 結果的に全部が確認待ちに回るだけで、誤登録が起きるわけではない）。
+ * このスクリプトはカードを絶対に自動作成しないので、ここで取れた一覧だけが
+ * 「登録してよい」判定の唯一の根拠になる。
  */
-function getExistingCardsCache_(accessToken) {
+function getExistingCards_(accessToken) {
   try {
     const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'cards');
     const options = { method: 'get', headers: { Authorization: 'Bearer ' + accessToken }, muteHttpExceptions: true };
     const response = UrlFetchApp.fetch(url, options);
-    if (response.getResponseCode() >= 300) return {};
+    if (response.getResponseCode() >= 300) return [];
     const data = JSON.parse(response.getContentText() || '{}');
     const docs = data.documents || [];
-    const cache = {};
-    docs.forEach((d) => {
-      const name = d.fields && d.fields.name && d.fields.name.stringValue;
-      if (name) cache[name] = d.name.split('/').pop(); // dのnameはフルパスなので末尾がドキュメントID
-    });
-    return cache;
+    return docs
+      .map((d) => {
+        const fields = d.fields || {};
+        return {
+          id: d.name.split('/').pop(), // dのnameはフルパスなので末尾がドキュメントID
+          name: (fields.name && fields.name.stringValue) || '',
+          last4: (fields.last4 && fields.last4.stringValue) || '',
+        };
+      })
+      .filter((c) => c.name);
   } catch (e) {
-    console.warn('カード一覧の取得に失敗しました（ヒント無しで続行します）: ' + e);
-    return {};
+    console.warn('カード一覧の取得に失敗しました（すべて確認待ちになります）: ' + e);
+    return [];
   }
-}
-
-// 自動作成するカードのテーマ色（アプリ側のCARD_THEMESと同じキー）。
-// カード会社名ごとに固定の色になるよう、名前から決定的に選ぶ。
-const CARD_THEME_PALETTE = ['purple', 'dark', 'emerald', 'blue', 'sunset'];
-function themeForIssuer_(issuerName) {
-  let hash = 0;
-  const s = String(issuerName || '');
-  for (let i = 0; i < s.length; i += 1) {
-    hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
-  }
-  return CARD_THEME_PALETTE[hash % CARD_THEME_PALETTE.length];
 }
 
 /**
- * cardCache（{ カード名: カードID }）に issuerName が無ければ新規作成し、
- * カードIDを返す。1回の実行内で同じ新規カード名が複数回出てきても、
- * 2回目以降はキャッシュを見るだけでFirestoreへの問い合わせをしない。
+ * 確認待ち（pendingImports）に1件保存する。idを固定にして PATCH（作成 or
+ * 上書き）することで、同じメールを何度処理しても確認待ちが重複しない。
  */
-function ensureCardExists_(accessToken, cardCache, issuerName) {
-  if (cardCache[issuerName]) return cardCache[issuerName];
-
-  const cardId = slugifyCardId_(issuerName);
-  const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'cards', cardId);
-
-  // キャッシュに無くても、実際にはもう存在することがある（例:
-  // getExistingCardsCache_ が何らかの理由で取得に失敗し空になっていた場合）。
-  // 既存カード（保有者名・限度額など実データ入り）を空の初期値で
-  // 上書きしてしまわないよう、作成前に必ず存在確認する。
-  const existing = UrlFetchApp.fetch(url, {
-    method: 'get',
-    headers: { Authorization: 'Bearer ' + accessToken },
-    muteHttpExceptions: true,
-  });
-  if (existing.getResponseCode() === 200) {
-    cardCache[issuerName] = cardId;
-    return cardId;
-  }
-
-  const card = {
-    name: issuerName,
-    brand: 'VISA',
-    last4: '----',
-    number: '',
-    holderName: '',
-    expiry: '',
-    cvv: '',
-    theme: themeForIssuer_(issuerName),
-    limit: 0,
-    billingDay: '末日',
-    paymentDay: '27',
-    weekendAdjustment: 'none',
-    bankAccount: '',
-  };
-  firestoreRequest_(accessToken, 'patch', url, { fields: toFirestoreFields_(card) });
-  cardCache[issuerName] = cardId;
-  return cardId;
+function upsertPendingImport_(accessToken, id, data) {
+  const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'pendingImports', id);
+  firestoreRequest_(accessToken, 'patch', url, { fields: toFirestoreFields_(data) });
 }
 
 function updateStatus_(accessToken, status) {

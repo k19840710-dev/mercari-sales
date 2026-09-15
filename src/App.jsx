@@ -35,6 +35,7 @@ import {
   Cloud,
   LogOut,
   Loader2,
+  Inbox,
 } from 'lucide-react';
 import TrendChart from './components/TrendChart.jsx';
 import {
@@ -50,6 +51,8 @@ import {
   getTransactionsColRef,
   cardDocRef,
   transactionDocRef,
+  getPendingImportsColRef,
+  pendingImportDocRef,
   gmailImportStatusDocRef,
   setDoc,
   deleteDoc,
@@ -629,10 +632,16 @@ export default function App() {
   // モーダルの状態
   const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
   const [isAddCardOpen, setIsAddCardOpen] = useState(false);
+  const [isPendingReviewOpen, setIsPendingReviewOpen] = useState(false);
 
   // 編集中のID（nullなら新規追加モード）
   const [editingTxId, setEditingTxId] = useState(null);
   const [editingCardId, setEditingCardId] = useState(null);
+  // 確認待ちの利用通知から「このカードを追加する」で開いた場合、そのカード保存後に
+  // 続けて明細を作成し、確認待ちから消すために覚えておくID
+  const [resolvingPendingId, setResolvingPendingId] = useState(null);
+  // 確認待ち一覧で「既存カードに紐付ける」プルダウンの選択状態（明細id → cardId）
+  const [pendingLinkChoice, setPendingLinkChoice] = useState({});
 
   // クレジットカードデータ（保存データがあればそれを、無ければサンプルを初期値に）
   const [cards, setCards] = useState(() => loadList(STORAGE_KEYS.cards, DEFAULT_CARDS));
@@ -715,6 +724,18 @@ export default function App() {
       gmailImportStatusDocRef(authUser.uid),
       (snap) => setGmailImportStatus(snap.exists() ? snap.data() : null),
       () => setGmailImportStatus(null)
+    );
+    return unsub;
+  }, [authUser]);
+
+  // Gmail自動取り込みが「確信が持てなかった」ため保留した利用通知（確認待ち）
+  const [pendingImports, setPendingImports] = useState([]);
+  useEffect(() => {
+    if (!authUser) return undefined;
+    const unsub = onSnapshot(
+      getPendingImportsColRef(authUser.uid),
+      (snap) => setPendingImports(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => console.error('確認待ち一覧の同期に失敗しました', err)
     );
     return unsub;
   }, [authUser]);
@@ -1095,6 +1116,7 @@ export default function App() {
   const handleCloseCardModal = () => {
     setIsAddCardOpen(false);
     setEditingCardId(null);
+    setResolvingPendingId(null);
     resetNewCardForm();
   };
 
@@ -1175,6 +1197,7 @@ export default function App() {
     if (!newCard.name || !authUser) return;
 
     const digits = newCard.number.replace(/\D/g, '');
+    const pendingItem = resolvingPendingId ? pendingImports.find((p) => p.id === resolvingPendingId) : null;
 
     try {
       if (editingCardId) {
@@ -1190,6 +1213,12 @@ export default function App() {
           last4: digits ? digits.slice(-4) : '0000',
         };
         await setDoc(cardDocRef(authUser.uid, id), createdCard);
+
+        // 確認待ちの利用通知から「このカードを追加する」で来た場合は、新しく
+        // 作ったカードの明細として登録し、確認待ちからは消す。
+        if (pendingItem) {
+          await handleResolvePendingToTransaction(pendingItem, id);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -1197,6 +1226,57 @@ export default function App() {
     }
 
     handleCloseCardModal();
+  };
+
+  // 確認待ちの利用通知を、指定したカードの明細として登録し、確認待ちからは削除する
+  const handleResolvePendingToTransaction = async (item, cardId) => {
+    if (!authUser || !cardId) return;
+    // Gmail取込側の確認待ちドキュメントは `p-gmail-<messageId>` というidで作られているので、
+    // 明細側も同じmessageIdから作る（万一同じメールが将来また処理されても上書きで済む）。
+    const messageId = item.id.startsWith('p-gmail-') ? item.id.slice('p-gmail-'.length) : item.id;
+    await setDoc(transactionDocRef(authUser.uid, `t-gmail-${messageId}`), {
+      cardId,
+      amount: Number(item.amount) || 0,
+      date: item.date || new Date().toISOString().split('T')[0],
+      category: item.category || 'other',
+      memo: item.merchant || item.issuerNameGuess || '利用明細',
+    });
+    await deleteDoc(pendingImportDocRef(authUser.uid, item.id));
+  };
+
+  const handleLinkPendingToExistingCard = async (item) => {
+    if (!authUser) return;
+    const cardId = pendingLinkChoice[item.id] || cards[0]?.id;
+    if (!cardId) return;
+    try {
+      await handleResolvePendingToTransaction(item, cardId);
+    } catch (err) {
+      console.error(err);
+      alert('明細の登録に失敗しました。通信環境をご確認ください。');
+    }
+  };
+
+  const handleIgnorePendingImport = async (item) => {
+    if (!authUser) return;
+    try {
+      await deleteDoc(pendingImportDocRef(authUser.uid, item.id));
+    } catch (err) {
+      console.error(err);
+      alert('削除に失敗しました。');
+    }
+  };
+
+  const handleOpenAddCardFromPending = (item) => {
+    resetNewCardForm();
+    setNewCard((prev) => ({
+      ...prev,
+      name: item.issuerNameGuess || item.merchant || '新しいカード',
+      number: item.last4Guess || '',
+    }));
+    setEditingCardId(null);
+    setResolvingPendingId(item.id);
+    setIsPendingReviewOpen(false);
+    setIsAddCardOpen(true);
   };
 
   const handleDeleteCard = async (cardId) => {
@@ -1528,6 +1608,18 @@ export default function App() {
 
           {/* 明細追加ボタン & アカウント */}
           <div className="flex items-center gap-2">
+            {pendingImports.length > 0 && (
+              <button
+                onClick={() => setIsPendingReviewOpen(true)}
+                className="relative p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                title={`確認待ち ${pendingImports.length}件`}
+              >
+                <Inbox className="w-4 h-4" />
+                <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-[10px] font-bold text-slate-900 flex items-center justify-center">
+                  {pendingImports.length}
+                </span>
+              </button>
+            )}
             <button
               onClick={() => setIsAccountModalOpen(true)}
               className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
@@ -2772,7 +2864,102 @@ export default function App() {
         </div>
       )}
 
-      {/* 9. モーダル: アカウント（クラウド同期） */}
+      {/* 9. モーダル: 確認待ちの利用通知（Gmail自動取込みが確信を持てなかったもの） */}
+      {isPendingReviewOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <Inbox className="w-5 h-5 text-amber-400" />
+                確認待ち（{pendingImports.length}件）
+              </h3>
+              <button
+                onClick={() => setIsPendingReviewOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+              Gmail自動取込みが「利用通知かどうか」「どのカードの明細か」を確信できなかったメールです。
+              内容を確認して、登録するか無視するか選んでください。
+            </p>
+
+            {pendingImports.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-6">確認待ちはありません。</p>
+            ) : (
+              <div className="space-y-3">
+                {pendingImports.map((item) => (
+                  <div key={item.id} className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-white truncate">{item.merchant || item.issuerNameGuess || '(店舗不明)'}</p>
+                        <p className="text-xs text-slate-400 truncate" title={item.subject}>{item.subject}</p>
+                        <p className="text-[11px] text-slate-500 truncate" title={item.from}>差出人: {item.from || '不明'}</p>
+                      </div>
+                      {item.amount ? (
+                        <span className="flex-none text-sm font-mono font-bold text-white">¥{Number(item.amount).toLocaleString()}</span>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                      <span>利用日: {item.date || '不明'}</span>
+                      <span>
+                        推定カード: {item.issuerNameGuess || '不明'}
+                        {item.last4Guess ? `（下4桁: ${item.last4Guess}）` : ''}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-300 bg-slate-800/80 border border-slate-700/50 rounded-lg px-2 py-1.5">
+                      判定理由: {item.reason || '不明'}
+                    </p>
+
+                    {cards.length > 0 && (
+                      <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                        <select
+                          value={pendingLinkChoice[item.id] || cards[0]?.id || ''}
+                          onChange={(e) => setPendingLinkChoice((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                          className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                        >
+                          {cards.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleLinkPendingToExistingCard(item)}
+                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium whitespace-nowrap"
+                        >
+                          このカードに登録
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAddCardFromPending(item)}
+                        className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-300 text-xs font-medium"
+                      >
+                        新しいカードとして追加
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleIgnorePendingImport(item)}
+                        className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-400 hover:text-red-400 text-xs font-medium"
+                      >
+                        無視する
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 10. モーダル: アカウント（クラウド同期） */}
       {isAccountModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-sm w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
