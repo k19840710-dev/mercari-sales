@@ -52,6 +52,10 @@ export const transactionDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'user
 // ここに一旦溜めて、アプリ側でユーザーが内容を確認してから登録する。
 export const getPendingImportsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'pendingImports');
 export const pendingImportDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'pendingImports', id);
+// 支払い方法（クレジットカード／現金／PayPayなど）。カードとは別に、追加・編集・
+// 無効化できる拡張可能なマスタとして持つ（コードに固定実装しない）。
+export const getPaymentMethodsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'paymentMethods');
+export const paymentMethodDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'paymentMethods', id);
 // Gmail自動取り込み（Apps Script）の実行状況。アプリ側は読み取り専用で表示するだけ。
 export const gmailImportStatusDocRef = (uid) => doc(db, 'artifacts', APP_ID, 'users', uid, 'settings', 'gmailImportStatus');
 

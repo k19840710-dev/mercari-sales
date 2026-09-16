@@ -53,6 +53,8 @@ import {
   transactionDocRef,
   getPendingImportsColRef,
   pendingImportDocRef,
+  getPaymentMethodsColRef,
+  paymentMethodDocRef,
   gmailImportStatusDocRef,
   setDoc,
   deleteDoc,
@@ -291,6 +293,26 @@ const DEFAULT_TRANSACTIONS = [
   { id: 't-4', cardId: 'card-1', amount: 9800, date: '2026-08-10', category: 'communication', memo: '通信費・サブスク' },
   { id: 't-5', cardId: 'card-2', amount: 12400, date: '2026-08-12', category: 'social', memo: '友人とのディナー' },
   { id: 't-6', cardId: 'card-1', amount: 4500, date: '2026-08-15', category: 'food', memo: 'カフェ・ランチ' },
+];
+
+// クレジットカード以外の支払い方法（現金・PayPay等）を、カードとは別の
+// 拡張可能なマスタとして持つ。コードに個別の決済サービスを固定実装するのではなく、
+// 「支払い方法」というデータとして追加・編集・無効化できるようにするための土台。
+// id は固定値にしておくことで、既存の明細（cardIdのみを持つ）を後方互換で
+// 「クレジットカード」として扱う際の参照先にできる。
+// type は画面には出さず、将来カテゴリ分け（QRコード決済まとめ表示等）が必要に
+// なったときのための内部区分。
+const PAYMENT_METHOD_CREDIT_CARD_ID = 'pm-credit-card';
+const DEFAULT_PAYMENT_METHODS = [
+  { id: PAYMENT_METHOD_CREDIT_CARD_ID, name: 'クレジットカード', type: 'credit_card', icon: 'credit-card', displayOrder: 0, isActive: true },
+  { id: 'pm-cash', name: '現金', type: 'cash', icon: 'wallet', displayOrder: 1, isActive: true },
+  { id: 'pm-paypay', name: 'PayPay', type: 'qr_payment', icon: 'qr-code', displayOrder: 2, isActive: true },
+  { id: 'pm-paidy', name: 'Paidy', type: 'deferred_payment', icon: 'clock', displayOrder: 3, isActive: true },
+  { id: 'pm-rakuten-pay', name: '楽天ペイ', type: 'qr_payment', icon: 'qr-code', displayOrder: 4, isActive: true },
+  { id: 'pm-d-payment', name: 'd払い', type: 'qr_payment', icon: 'qr-code', displayOrder: 5, isActive: true },
+  { id: 'pm-au-pay', name: 'au PAY', type: 'qr_payment', icon: 'qr-code', displayOrder: 6, isActive: true },
+  { id: 'pm-merpay', name: 'メルペイ', type: 'qr_payment', icon: 'qr-code', displayOrder: 7, isActive: true },
+  { id: 'pm-other', name: 'その他', type: 'other', icon: 'more-horizontal', displayOrder: 8, isActive: true },
 ];
 
 function currentMonthKey() {
@@ -740,6 +762,40 @@ export default function App() {
     return unsub;
   }, [authUser]);
 
+  // 支払い方法（クレジットカード／現金／PayPay等）のリアルタイム購読
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  useEffect(() => {
+    if (!authUser) return undefined;
+    const unsub = onSnapshot(
+      getPaymentMethodsColRef(authUser.uid),
+      (snap) => setPaymentMethods(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => console.error('支払い方法の同期に失敗しました', err)
+    );
+    return unsub;
+  }, [authUser]);
+
+  // 支払い方法マスタが1件も無ければ、初期セット（クレジットカード・現金・PayPay等）を
+  // 1度だけ書き込む。既存ユーザー（カード・明細はあるが支払い方法コレクションは
+  // まだ無い）でも動くよう、cards/transactionsの初回移行とは別に判定する。
+  const paymentMethodsSeededRef = useRef(null);
+  useEffect(() => {
+    if (!authUser) return;
+    if (paymentMethodsSeededRef.current === authUser.uid) return;
+    paymentMethodsSeededRef.current = authUser.uid;
+
+    (async () => {
+      try {
+        const existing = await getDocs(getPaymentMethodsColRef(authUser.uid));
+        if (!existing.empty) return;
+        const batch = writeBatch(db);
+        DEFAULT_PAYMENT_METHODS.forEach((pm) => batch.set(paymentMethodDocRef(authUser.uid, pm.id), pm));
+        await batch.commit();
+      } catch (err) {
+        console.error('支払い方法の初期登録に失敗しました', err);
+      }
+    })();
+  }, [authUser]);
+
   // 認証ゲート（未ログイン端末向け）フォームのステート
   const [gateEmail, setGateEmail] = useState('');
   const [gatePassword, setGatePassword] = useState('');
@@ -1158,7 +1214,18 @@ export default function App() {
     try {
       if (editingTxId) {
         const existing = transactions.find((t) => t.id === editingTxId);
-        const updated = { ...existing, cardId: newTx.cardId, amount: Number(newTx.amount), date: newTx.date, category: newTx.category, memo: newTx.memo || '利用明細' };
+        // paymentMethodIdが無い（本機能追加前からある）明細を編集した場合も、
+        // ここでクレジットカード扱いとして補完しておく（今の登録画面はまだ
+        // カード選択のみのため）。source（登録元）は編集しても変えない。
+        const updated = {
+          ...existing,
+          cardId: newTx.cardId,
+          amount: Number(newTx.amount),
+          date: newTx.date,
+          category: newTx.category,
+          memo: newTx.memo || '利用明細',
+          paymentMethodId: existing?.paymentMethodId || PAYMENT_METHOD_CREDIT_CARD_ID,
+        };
         delete updated.id;
         await setDoc(transactionDocRef(authUser.uid, editingTxId), updated);
       } else {
@@ -1169,6 +1236,8 @@ export default function App() {
           date: newTx.date,
           category: newTx.category,
           memo: newTx.memo || '利用明細',
+          paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+          source: 'manual',
         };
         await setDoc(transactionDocRef(authUser.uid, id), newEntry);
       }
@@ -1240,6 +1309,8 @@ export default function App() {
       date: item.date || new Date().toISOString().split('T')[0],
       category: item.category || 'other',
       memo: item.merchant || item.issuerNameGuess || '利用明細',
+      paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+      source: 'email',
     });
     await deleteDoc(pendingImportDocRef(authUser.uid, item.id));
   };
@@ -1505,6 +1576,8 @@ export default function App() {
         date: c.date,
         category: c.category,
         memo: c.memo,
+        paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+        source: 'ocr',
       }));
 
     try {

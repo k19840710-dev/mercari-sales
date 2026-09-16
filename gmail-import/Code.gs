@@ -44,6 +44,11 @@ const FIRESTORE_PROJECT_ID = 'sai-4d708';
 // 二重取り込み防止・処理済みの目印として付けるGmailラベル名（変更不要）
 const PROCESSED_LABEL_NAME = 'カード家計簿-取込済み';
 
+// アプリ側の支払い方法マスタ（paymentMethodsコレクション）で「クレジットカード」を
+// 表す固定id（src/App.jsxのPAYMENT_METHOD_CREDIT_CARD_IDと同じ値。変更不要）。
+// Gmail取込は常にクレジットカードの明細を扱うため、書き込む明細には常にこれを付ける。
+const PAYMENT_METHOD_CREDIT_CARD_ID = 'pm-credit-card';
+
 // AIモデル名。将来このモデルが使えなくなった場合は、Google AI Studio
 // (https://aistudio.google.com/) で使えるモデル名に差し替えてください。
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
@@ -214,6 +219,8 @@ function checkCardEmails() {
                   category: patchCategory,
                   memo: patchMemo,
                   gmailReceivedAt: patchReceivedAt,
+                  paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+                  source: 'email',
                 }),
               });
             }
@@ -229,6 +236,8 @@ function checkCardEmails() {
             category: finalCategory,
             memo: finalName,
             gmailReceivedAt: new Date(messageTime).toISOString(),
+            paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+            source: 'email',
           });
           importedCount += 1;
         } catch (err) {
