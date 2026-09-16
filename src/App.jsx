@@ -36,6 +36,7 @@ import {
   LogOut,
   Loader2,
   Inbox,
+  BarChart3,
 } from 'lucide-react';
 import TrendChart from './components/TrendChart.jsx';
 import {
@@ -649,7 +650,7 @@ function parseTransactionsFromRows(rawLines) {
 export default function App() {
   // 現在選択されている年月 (YYYY-MM) — 実際の今日の日付から算出
   const [currentMonth, setCurrentMonth] = useState(currentMonthKey);
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'transactions' | 'cards' | 'schedule'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'transactions' | 'calendar' | 'analysis' | 'cards'
 
   // モーダルの状態
   const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
@@ -1750,8 +1751,8 @@ export default function App() {
       {/* 3. メインコンテンツ領域 */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
 
-        {/* ナビゲーションタブ（スマホは2×2グリッド、sm以上は横一列） */}
-        <div className="grid grid-cols-2 sm:flex gap-1.5 sm:gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md mx-auto sm:mx-0">
+        {/* ナビゲーションタブ（スマホは3+2のグリッド、sm以上は横一列） */}
+        <div className="grid grid-cols-3 sm:flex gap-1.5 sm:gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-lg mx-auto sm:mx-0">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`min-w-0 sm:flex-1 py-2 px-1.5 sm:px-3 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 sm:gap-2 ${
@@ -1768,7 +1769,25 @@ export default function App() {
             }`}
           >
             <List className="w-4 h-4 shrink-0" />
-            <span className="truncate">明細一覧 ({monthlyTransactions.length})</span>
+            <span className="truncate">明細 ({monthlyTransactions.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('calendar')}
+            className={`min-w-0 sm:flex-1 py-2 px-1.5 sm:px-3 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 sm:gap-2 ${
+              activeTab === 'calendar' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Calendar className="w-4 h-4 shrink-0" />
+            <span className="truncate">カレンダー</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('analysis')}
+            className={`min-w-0 sm:flex-1 py-2 px-1.5 sm:px-3 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 sm:gap-2 ${
+              activeTab === 'analysis' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 shrink-0" />
+            <span className="truncate">分析</span>
           </button>
           <button
             onClick={() => setActiveTab('cards')}
@@ -1777,16 +1796,7 @@ export default function App() {
             }`}
           >
             <Wallet className="w-4 h-4 shrink-0" />
-            <span className="truncate">カード管理 ({cards.length})</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('schedule')}
-            className={`min-w-0 sm:flex-1 py-2 px-1.5 sm:px-3 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 sm:gap-2 ${
-              activeTab === 'schedule' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Calendar className="w-4 h-4 shrink-0" />
-            <span className="truncate">支払い予定</span>
+            <span className="truncate">カード ({cards.length})</span>
           </button>
         </div>
 
@@ -2198,7 +2208,33 @@ export default function App() {
           </div>
         )}
 
-        {/* --- タブ 3: クレジットカード管理 --- */}
+        {/* --- タブ 3: カレンダー（Phase 4で本実装予定。今は器のみ） --- */}
+        {activeTab === 'calendar' && (
+          <div className="space-y-6 animate-fadeIn">
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-10 shadow-xl flex flex-col items-center text-center gap-3">
+              <Calendar className="w-10 h-10 text-indigo-400" />
+              <h2 className="text-lg font-bold text-white">支出カレンダー（準備中）</h2>
+              <p className="text-sm text-slate-400 max-w-sm">
+                日ごとの支出合計を一目で確認できるカレンダーを準備しています。しばらくお待ちください。
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* --- タブ 4: 分析（Phase 5で本実装予定。今は器のみ） --- */}
+        {activeTab === 'analysis' && (
+          <div className="space-y-6 animate-fadeIn">
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-10 shadow-xl flex flex-col items-center text-center gap-3">
+              <BarChart3 className="w-10 h-10 text-indigo-400" />
+              <h2 className="text-lg font-bold text-white">月間・年間分析（準備中）</h2>
+              <p className="text-sm text-slate-400 max-w-sm">
+                カテゴリ別・支払い方法別の内訳や、年間の推移をまとめて見られる分析画面を準備しています。
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* --- タブ 5: カード管理（支払い予定を統合） --- */}
         {activeTab === 'cards' && (
           <div className="space-y-6 animate-fadeIn">
             <div className="flex justify-between items-center">
@@ -2389,13 +2425,8 @@ export default function App() {
                 );
               })}
             </div>
-          </div>
-        )}
 
-        {/* --- タブ 4: 支払い予定 --- */}
-        {activeTab === 'schedule' && (
-          <div className="space-y-6 animate-fadeIn">
-
+            {/* 支払い予定（旧・独立タブ。カード管理の一部として統合） */}
             {/* 支払予定一覧 */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
               <h2 className="text-lg font-bold text-white mb-4">支払予定一覧</h2>
