@@ -960,6 +960,58 @@ export default function App() {
     return monthlyTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
   }, [monthlyTransactions]);
 
+  // --- 支出カレンダー用の集計 ---
+  // 日付(YYYY-MM-DD)ごとの合計額・明細一覧
+  const dailyTotals = useMemo(() => {
+    const map = new Map();
+    monthlyTransactions.forEach((t) => {
+      const entry = map.get(t.date) || { total: 0, items: [] };
+      entry.total += Number(t.amount);
+      entry.items.push(t);
+      map.set(t.date, entry);
+    });
+    return map;
+  }, [monthlyTransactions]);
+
+  // 支出の多い日を色の濃さで目立たせるための基準値
+  const maxDailyTotal = useMemo(() => {
+    let max = 0;
+    dailyTotals.forEach((v) => { if (v.total > max) max = v.total; });
+    return max;
+  }, [dailyTotals]);
+
+  // 月表示カレンダーのマス目（週ごとの配列。月初・月末の空白はnull）
+  const calendarWeeks = useMemo(() => {
+    const [year, month] = currentMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const startWeekday = new Date(year, month - 1, 1).getDay(); // 0=日曜
+    const cells = [];
+    for (let i = 0; i < startWeekday; i += 1) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      cells.push({ day: d, dateKey: `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+    const weeks = [];
+    for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+    return weeks;
+  }, [currentMonth]);
+
+  // カレンダーで選択中の日付。表示中の月が今日を含む月なら今日を初期選択、
+  // それ以外の月では未選択（タップされるまで一覧を出さない）。
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
+  useEffect(() => {
+    const now = new Date();
+    const nowMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    setSelectedCalendarDate(nowMonthKey === currentMonth ? toDateKey(now) : null);
+  }, [currentMonth]);
+
+  // 明細1件の「支払い方法」表示名（クレジットカードならカード名、それ以外は支払い方法名）
+  const getPaymentLabel = (tx) => {
+    const card = tx.cardId ? cards.find((c) => c.id === tx.cardId) : null;
+    const method = paymentMethods.find((m) => m.id === tx.paymentMethodId);
+    return tx.cardId ? (card?.name || '削除されたカード') : (method?.name || 'その他');
+  };
+
   // カード別の当月利用額集計
   const cardMonthlyStats = useMemo(() => {
     return cards.map((card) => {
@@ -2151,11 +2203,7 @@ export default function App() {
               ) : (
                 <div className="divide-y divide-slate-700/50">
                   {filteredTransactions.map((tx) => {
-                    const card = tx.cardId ? cards.find((c) => c.id === tx.cardId) : null;
-                    const method = paymentMethods.find((m) => m.id === tx.paymentMethodId);
-                    // cardIdがあればクレジットカードの明細（無くなっていれば「削除された
-                    // カード」）。無ければ現金・PayPay等の支払い方法名を表示する。
-                    const paymentLabel = tx.cardId ? (card?.name || '削除されたカード') : (method?.name || 'その他');
+                    const paymentLabel = getPaymentLabel(tx);
                     const categoryObj = CATEGORIES.find((c) => c.id === tx.category) || CATEGORIES[CATEGORIES.length - 1];
                     const IconComponent = categoryObj.icon;
 
@@ -2208,15 +2256,100 @@ export default function App() {
           </div>
         )}
 
-        {/* --- タブ 3: カレンダー（Phase 4で本実装予定。今は器のみ） --- */}
+        {/* --- タブ 3: カレンダー（支出カレンダー） --- */}
         {activeTab === 'calendar' && (
           <div className="space-y-6 animate-fadeIn">
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-10 shadow-xl flex flex-col items-center text-center gap-3">
-              <Calendar className="w-10 h-10 text-indigo-400" />
-              <h2 className="text-lg font-bold text-white">支出カレンダー（準備中）</h2>
-              <p className="text-sm text-slate-400 max-w-sm">
-                日ごとの支出合計を一目で確認できるカレンダーを準備しています。しばらくお待ちください。
-              </p>
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 sm:p-5 shadow-xl">
+              <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-indigo-400" />
+                支出カレンダー（{formattedMonth}）
+              </h2>
+
+              <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-slate-500 mb-1">
+                {['日', '月', '火', '水', '木', '金', '土'].map((w) => (
+                  <div key={w}>{w}</div>
+                ))}
+              </div>
+
+              <div className="space-y-1">
+                {calendarWeeks.map((week, wi) => (
+                  <div key={wi} className="grid grid-cols-7 gap-1">
+                    {week.map((cell, di) => {
+                      if (!cell) return <div key={di} />;
+                      const entry = dailyTotals.get(cell.dateKey);
+                      const ratio = maxDailyTotal > 0 && entry ? entry.total / maxDailyTotal : 0;
+                      const isSelected = selectedCalendarDate === cell.dateKey;
+                      // 支出が多い日ほど濃い色にして、視覚的に目立たせる
+                      const heat = ratio >= 0.8
+                        ? 'bg-amber-500/20 border-amber-500/40'
+                        : ratio >= 0.4
+                          ? 'bg-indigo-500/20 border-indigo-500/30'
+                          : ratio > 0
+                            ? 'bg-indigo-500/10 border-indigo-500/20'
+                            : 'border-transparent hover:bg-slate-700/40';
+                      return (
+                        <button
+                          key={di}
+                          type="button"
+                          onClick={() => setSelectedCalendarDate(cell.dateKey)}
+                          className={`aspect-square rounded-lg border p-0.5 flex flex-col items-center justify-center gap-0.5 transition-colors ${heat} ${
+                            isSelected ? 'ring-2 ring-indigo-400' : ''
+                          }`}
+                        >
+                          <span className="text-[11px] sm:text-xs font-semibold text-slate-200">{cell.day}</span>
+                          {entry && (
+                            <span className="text-[8px] sm:text-[9px] font-medium text-slate-300 leading-none">
+                              ¥{entry.total.toLocaleString()}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 選択した日の支出一覧 */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+              {selectedCalendarDate ? (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-base font-bold text-white">
+                      {Number(selectedCalendarDate.slice(5, 7))}月{Number(selectedCalendarDate.slice(8, 10))}日
+                    </h3>
+                    <span className="text-lg font-bold text-white">
+                      合計 ¥{(dailyTotals.get(selectedCalendarDate)?.total || 0).toLocaleString()}
+                    </span>
+                  </div>
+                  {(dailyTotals.get(selectedCalendarDate)?.items || []).length === 0 ? (
+                    <p className="text-sm text-slate-500 text-center py-4">この日の支出はありません。</p>
+                  ) : (
+                    <div className="divide-y divide-slate-700/50">
+                      {dailyTotals.get(selectedCalendarDate).items.map((tx) => {
+                        const categoryObj = CATEGORIES.find((c) => c.id === tx.category) || CATEGORIES[CATEGORIES.length - 1];
+                        const IconComponent = categoryObj.icon;
+                        return (
+                          <div key={tx.id} className="py-3 flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className={`p-2 rounded-lg bg-slate-700 ${categoryObj.color.split(' ')[1]} shrink-0`}>
+                                <IconComponent className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-white truncate">{tx.memo}</p>
+                                <p className="text-xs text-slate-400 truncate">{getPaymentLabel(tx)}</p>
+                              </div>
+                            </div>
+                            <span className="text-sm font-bold text-white shrink-0">¥{Number(tx.amount).toLocaleString()}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-slate-500 text-center py-4">カレンダーの日付をタップすると、その日の支出明細が表示されます。</p>
+              )}
             </div>
           </div>
         )}
