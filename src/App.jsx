@@ -1086,6 +1086,81 @@ export default function App() {
     })).sort((a, b) => b.amount - a.amount);
   }, [monthlyTransactions, totalMonthlyAmount]);
 
+  // --- 分析タブ（月間・年間）用の集計 ---
+  const [analysisMode, setAnalysisMode] = useState('monthly'); // 'monthly' | 'yearly'
+  // 年間分析で見る年。月切替（currentMonth）とは独立させ、専用の前年/翌年ボタンで動かす。
+  const [analysisYear, setAnalysisYear] = useState(() => Number(currentMonth.split('-')[0]));
+
+  // 月間分析: 1日平均（その月の日数で割る。カレンダーの日数ベースで、記録が
+  // あった日数ではない）
+  const dailyAverageThisMonth = useMemo(() => {
+    const [year, month] = currentMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    return daysInMonth > 0 ? totalMonthlyAmount / daysInMonth : 0;
+  }, [currentMonth, totalMonthlyAmount]);
+
+  // 年間分析: 選択中の年の全明細
+  const yearlyTransactions = useMemo(() => {
+    return transactions.filter((t) => t.date.startsWith(String(analysisYear)));
+  }, [transactions, analysisYear]);
+
+  const yearlyTotal = useMemo(
+    () => yearlyTransactions.reduce((sum, t) => sum + Number(t.amount), 0),
+    [yearlyTransactions]
+  );
+
+  // 1〜12月を必ず埋めた推移（データが無い月も0円のバーとして出す）
+  const yearlyMonthlySeries = useMemo(() => {
+    return Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1;
+      const key = `${analysisYear}-${String(m).padStart(2, '0')}`;
+      const value = yearlyTransactions
+        .filter((t) => t.date.startsWith(key))
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      return { key, xLabel: `${m}月`, fullLabel: `${analysisYear}年${m}月`, value };
+    });
+  }, [yearlyTransactions, analysisYear]);
+
+  const topSpendingMonth = useMemo(() => {
+    if (!yearlyMonthlySeries.some((m) => m.value > 0)) return null;
+    return yearlyMonthlySeries.reduce((max, m) => (m.value > max.value ? m : max), yearlyMonthlySeries[0]);
+  }, [yearlyMonthlySeries]);
+
+  const yearlyCategoryStats = useMemo(() => {
+    const map = {};
+    CATEGORIES.forEach((c) => { map[c.id] = 0; });
+    yearlyTransactions.forEach((t) => {
+      if (map[t.category] !== undefined) {
+        map[t.category] += Number(t.amount);
+      } else {
+        map.other = (map.other || 0) + Number(t.amount);
+      }
+    });
+    return CATEGORIES.map((cat) => ({
+      ...cat,
+      amount: map[cat.id] || 0,
+      percentage: yearlyTotal > 0 ? Math.round(((map[cat.id] || 0) / yearlyTotal) * 100) : 0,
+    })).sort((a, b) => b.amount - a.amount);
+  }, [yearlyTransactions, yearlyTotal]);
+
+  // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
+  // 現金・PayPay等はpaymentMethodIdをそのまま使う）
+  const paymentMethodMonthlyStats = useMemo(() => {
+    const totals = new Map();
+    monthlyTransactions.forEach((t) => {
+      const pmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
+      totals.set(pmId, (totals.get(pmId) || 0) + Number(t.amount));
+    });
+    return [...totals.entries()]
+      .map(([id, amount]) => ({
+        id,
+        name: paymentMethods.find((m) => m.id === id)?.name || 'その他',
+        amount,
+        percentage: totalMonthlyAmount > 0 ? Math.round((amount / totalMonthlyAmount) * 100) : 0,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [monthlyTransactions, paymentMethods, totalMonthlyAmount]);
+
   // 月別支出推移（全期間・全カード or 特定カード）
   const trendSeries = useMemo(() => {
     const activeCardId = trendCardId || cards[0]?.id || '';
@@ -2354,16 +2429,198 @@ export default function App() {
           </div>
         )}
 
-        {/* --- タブ 4: 分析（Phase 5で本実装予定。今は器のみ） --- */}
+        {/* --- タブ 4: 分析（月間・年間） --- */}
         {activeTab === 'analysis' && (
           <div className="space-y-6 animate-fadeIn">
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-10 shadow-xl flex flex-col items-center text-center gap-3">
-              <BarChart3 className="w-10 h-10 text-indigo-400" />
-              <h2 className="text-lg font-bold text-white">月間・年間分析（準備中）</h2>
-              <p className="text-sm text-slate-400 max-w-sm">
-                カテゴリ別・支払い方法別の内訳や、年間の推移をまとめて見られる分析画面を準備しています。
-              </p>
+
+            {/* 月間/年間 切り替え */}
+            <div className="flex bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-xs">
+              <button
+                onClick={() => setAnalysisMode('monthly')}
+                className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all ${
+                  analysisMode === 'monthly' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                月間
+              </button>
+              <button
+                onClick={() => setAnalysisMode('yearly')}
+                className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all ${
+                  analysisMode === 'yearly' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                年間
+              </button>
             </div>
+
+            {analysisMode === 'monthly' ? (
+              <>
+                <h2 className="text-lg font-bold text-white">{formattedMonth}の分析</h2>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">総支出</p>
+                    <div className="mt-2 text-2xl font-extrabold text-white">¥{totalMonthlyAmount.toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支出件数</p>
+                    <div className="mt-2 text-2xl font-extrabold text-white">{monthlyTransactions.length}<span className="text-sm text-slate-400 ml-1">件</span></div>
+                  </div>
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">1日平均</p>
+                    <div className="mt-2 text-2xl font-extrabold text-white">¥{Math.round(dailyAverageThisMonth).toLocaleString()}</div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-indigo-400" />
+                    カテゴリ別
+                  </h3>
+                  {totalMonthlyAmount === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">この月の支出はありません。</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {categoryStats.filter((c) => c.amount > 0).map((cat) => {
+                        const IconComponent = cat.icon;
+                        return (
+                          <div key={cat.id} className="space-y-1">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center space-x-2">
+                                <div className={`p-1.5 rounded-lg bg-slate-700 ${cat.color.split(' ')[1]}`}>
+                                  <IconComponent className="w-4 h-4" />
+                                </div>
+                                <span className="font-medium text-slate-200">{cat.name}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-bold text-white">¥{cat.amount.toLocaleString()}</span>
+                                <span className="text-xs text-slate-400 ml-2">({cat.percentage}%)</span>
+                              </div>
+                            </div>
+                            <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${cat.color.split(' ')[0]}`}
+                                style={{ width: `${cat.percentage}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-indigo-400" />
+                    支払い方法別
+                  </h3>
+                  {paymentMethodMonthlyStats.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">この月の支出はありません。</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {paymentMethodMonthlyStats.map((pm) => (
+                        <div key={pm.id} className="flex items-center justify-between text-sm">
+                          <span className="text-slate-300">{pm.name}</span>
+                          <div className="text-right">
+                            <span className="font-bold text-white">¥{pm.amount.toLocaleString()}</span>
+                            <span className="text-xs text-slate-400 ml-2">({pm.percentage}%)</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between max-w-xs">
+                  <button
+                    onClick={() => setAnalysisYear((y) => y - 1)}
+                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="前年"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <h2 className="text-lg font-bold text-white">{analysisYear}年の分析</h2>
+                  <button
+                    onClick={() => setAnalysisYear((y) => y + 1)}
+                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="翌年"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">年間支出</p>
+                    <div className="mt-2 text-2xl font-extrabold text-white">¥{yearlyTotal.toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">月平均</p>
+                    <div className="mt-2 text-2xl font-extrabold text-white">¥{Math.round(yearlyTotal / 12).toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">最も支出が多かった月</p>
+                    {topSpendingMonth ? (
+                      <div className="mt-2">
+                        <div className="text-lg font-bold text-white">{topSpendingMonth.xLabel}</div>
+                        <div className="text-indigo-400 font-semibold mt-0.5">¥{topSpendingMonth.value.toLocaleString()}</div>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-slate-500 text-sm">データがありません</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-1 flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-indigo-400" />
+                    月別推移
+                  </h3>
+                  <TrendChart series={yearlyMonthlySeries} />
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                    <Tag className="w-4 h-4 text-indigo-400" />
+                    カテゴリ別
+                  </h3>
+                  {yearlyTotal === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">この年の支出はありません。</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {yearlyCategoryStats.filter((c) => c.amount > 0).map((cat) => {
+                        const IconComponent = cat.icon;
+                        return (
+                          <div key={cat.id} className="space-y-1">
+                            <div className="flex items-center justify-between text-sm">
+                              <div className="flex items-center space-x-2">
+                                <div className={`p-1.5 rounded-lg bg-slate-700 ${cat.color.split(' ')[1]}`}>
+                                  <IconComponent className="w-4 h-4" />
+                                </div>
+                                <span className="font-medium text-slate-200">{cat.name}</span>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-bold text-white">¥{cat.amount.toLocaleString()}</span>
+                                <span className="text-xs text-slate-400 ml-2">({cat.percentage}%)</span>
+                              </div>
+                            </div>
+                            <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${cat.color.split(' ')[0]}`}
+                                style={{ width: `${cat.percentage}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
