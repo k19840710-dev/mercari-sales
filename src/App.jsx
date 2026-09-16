@@ -884,6 +884,7 @@ export default function App() {
 
   // 新規明細フォームのステート
   const [newTx, setNewTx] = useState({
+    paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
     cardId: cards[0]?.id || '',
     amount: '',
     date: new Date().toISOString().split('T')[0],
@@ -1138,6 +1139,7 @@ export default function App() {
   // --- アクションハンドラー ---
   const resetNewTxForm = () => {
     setNewTx({
+      paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
       cardId: cards[0]?.id || '',
       amount: '',
       date: new Date().toISOString().split('T')[0],
@@ -1178,7 +1180,8 @@ export default function App() {
 
   const handleOpenEditTransaction = (tx) => {
     setNewTx({
-      cardId: tx.cardId,
+      paymentMethodId: tx.paymentMethodId || PAYMENT_METHOD_CREDIT_CARD_ID,
+      cardId: tx.cardId || cards[0]?.id || '',
       amount: String(tx.amount),
       date: tx.date,
       category: tx.category,
@@ -1209,34 +1212,37 @@ export default function App() {
 
   const handleSaveTransaction = async (e) => {
     e.preventDefault();
-    if (!newTx.amount || !newTx.cardId || !authUser) return;
+    // 選択中の支払い方法が「クレジットカード」タイプの場合だけ、カードの
+    // 選択が必須（現金・PayPay等はcardId不要）。
+    const selectedMethod = paymentMethods.find((m) => m.id === newTx.paymentMethodId);
+    const isCreditCard = selectedMethod ? selectedMethod.type === 'credit_card' : newTx.paymentMethodId === PAYMENT_METHOD_CREDIT_CARD_ID;
+    if (!newTx.amount || !newTx.paymentMethodId || (isCreditCard && !newTx.cardId) || !authUser) return;
+
+    const cardId = isCreditCard ? newTx.cardId : null;
 
     try {
       if (editingTxId) {
         const existing = transactions.find((t) => t.id === editingTxId);
-        // paymentMethodIdが無い（本機能追加前からある）明細を編集した場合も、
-        // ここでクレジットカード扱いとして補完しておく（今の登録画面はまだ
-        // カード選択のみのため）。source（登録元）は編集しても変えない。
         const updated = {
           ...existing,
-          cardId: newTx.cardId,
+          paymentMethodId: newTx.paymentMethodId,
+          cardId,
           amount: Number(newTx.amount),
           date: newTx.date,
           category: newTx.category,
           memo: newTx.memo || '利用明細',
-          paymentMethodId: existing?.paymentMethodId || PAYMENT_METHOD_CREDIT_CARD_ID,
         };
         delete updated.id;
         await setDoc(transactionDocRef(authUser.uid, editingTxId), updated);
       } else {
         const id = `t-${Date.now()}`;
         const newEntry = {
-          cardId: newTx.cardId,
+          paymentMethodId: newTx.paymentMethodId,
+          cardId,
           amount: Number(newTx.amount),
           date: newTx.date,
           category: newTx.category,
           memo: newTx.memo || '利用明細',
-          paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
           source: 'manual',
         };
         await setDoc(transactionDocRef(authUser.uid, id), newEntry);
@@ -2135,7 +2141,11 @@ export default function App() {
               ) : (
                 <div className="divide-y divide-slate-700/50">
                   {filteredTransactions.map((tx) => {
-                    const card = cards.find((c) => c.id === tx.cardId);
+                    const card = tx.cardId ? cards.find((c) => c.id === tx.cardId) : null;
+                    const method = paymentMethods.find((m) => m.id === tx.paymentMethodId);
+                    // cardIdがあればクレジットカードの明細（無くなっていれば「削除された
+                    // カード」）。無ければ現金・PayPay等の支払い方法名を表示する。
+                    const paymentLabel = tx.cardId ? (card?.name || '削除されたカード') : (method?.name || 'その他');
                     const categoryObj = CATEGORIES.find((c) => c.id === tx.category) || CATEGORIES[CATEGORIES.length - 1];
                     const IconComponent = categoryObj.icon;
 
@@ -2154,7 +2164,7 @@ export default function App() {
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
                               <div>{tx.date}</div>
-                              <div className="text-slate-300 font-medium truncate">{card?.name || '削除されたカード'}</div>
+                              <div className="text-slate-300 font-medium truncate">{paymentLabel}</div>
                             </div>
                           </div>
                         </div>
@@ -2516,19 +2526,34 @@ export default function App() {
                 />
               </div>
 
-              {/* クレジットカード選択 */}
+              {/* 支払い方法選択（クレジットカードの場合のみ、下にカード選択が出る） */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">利用したカード</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">支払い方法</label>
                 <select
-                  value={newTx.cardId}
-                  onChange={(e) => setNewTx({ ...newTx, cardId: e.target.value })}
+                  value={newTx.paymentMethodId}
+                  onChange={(e) => setNewTx({ ...newTx, paymentMethodId: e.target.value })}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
                 >
-                  {cards.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.brand})</option>
+                  {[...paymentMethods].filter((m) => m.isActive !== false).sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)).map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
                 </select>
               </div>
+
+              {(paymentMethods.find((m) => m.id === newTx.paymentMethodId)?.type ?? 'credit_card') === 'credit_card' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-2">カード</label>
+                  <select
+                    value={newTx.cardId}
+                    onChange={(e) => setNewTx({ ...newTx, cardId: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                  >
+                    {cards.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name} ({c.brand})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* 利用日 & カテゴリ */}
               {/* iOS Safari の <input type="date"> は CSS で幅を縮められない内部レイアウトを
