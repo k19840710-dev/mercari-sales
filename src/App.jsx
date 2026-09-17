@@ -1147,11 +1147,9 @@ export default function App() {
   // カテゴリの推移で「どれを見るか」（ダッシュボードの月別推移とは別に持つ。
   // 同じ選択肢を共有すると、片方の画面を触ると他方の表示も変わってしまうため）
   const [analysisCategoryId, setAnalysisCategoryId] = useState('');
-  // カテゴリ分析: 月単位（選択中のanalysisYearの1〜12月）で見るか、年単位（全期間の年ごと）で見るか
-  const [categoryPeriodMode, setCategoryPeriodMode] = useState('monthly'); // 'monthly' | 'yearly'
-  // 月間/年間分析のカテゴリ別支出の行をタップした時に開く詳細ドリルダウンモーダル
+  // 月間/年間分析のカテゴリ別支出の行をタップした時に開く詳細ドリルダウンモーダル。
+  // 月別/年別はモーダル内で切り替えさせず、開いた元画面のanalysisModeをそのまま引き継ぐ。
   const [isCategoryDrilldownOpen, setIsCategoryDrilldownOpen] = useState(false);
-  const [isCategoryPickerOpen, setIsCategoryPickerOpen] = useState(false);
   const openCategoryDrilldown = (catId) => {
     setAnalysisCategoryId(catId);
     setIsCategoryDrilldownOpen(true);
@@ -1277,16 +1275,16 @@ export default function App() {
     return out;
   }, [transactions, analysisCategoryId]);
 
-  // カテゴリ分析: 表示中の期間モード（月別/年別）に応じたseriesと、その要約統計
-  // （直近ポイントの金額・前期間比・平均・最大の期間）。平均は年間分析の「月平均」と
+  // カテゴリ分析: 月別/年別はモーダル内で独立して切り替えさせず、分析タブの
+  // analysisMode（月間/年間）をそのまま引き継ぐ。平均は年間分析の「月平均」と
   // 同じ考え方で、データが無い期間も含めた固定件数（12ヶ月 or 年数）で割る。
-  const categoryPeriodSeries = categoryPeriodMode === 'yearly' ? categoryYearlySeries : categoryMonthlySeries;
+  const categoryPeriodSeries = analysisMode === 'yearly' ? categoryYearlySeries : categoryMonthlySeries;
   const categoryPeriodSummary = useMemo(() => {
     if (!categoryPeriodSeries.length) return null;
     const total = categoryPeriodSeries.reduce((sum, p) => sum + p.value, 0);
     const average = total / categoryPeriodSeries.length;
     const max = categoryPeriodSeries.reduce((m, p) => (p.value > m.value ? p : m), categoryPeriodSeries[0]);
-    if (categoryPeriodMode === 'monthly') {
+    if (analysisMode !== 'yearly') {
       // 月別: グラフ自体が直近月（多くの場合まだデータの無い月）の単月額を表示するので、
       // ヘッドラインは同じ数字が重複しないよう「その年の合計額」にする。
       return { headline: total, headlineLabel: '今年の合計金額', average, max: max.value > 0 ? max : null, showMax: true };
@@ -1295,7 +1293,7 @@ export default function App() {
     // データがある時だけ出す（1年しかない場合はヘッドラインと同じ数字の重複になるため）。
     const current = categoryPeriodSeries[categoryPeriodSeries.length - 1];
     return { headline: current.value, headlineLabel: '今年の金額', average, max: max.value > 0 ? max : null, showMax: categoryPeriodSeries.length > 1 };
-  }, [categoryPeriodSeries, categoryPeriodMode]);
+  }, [categoryPeriodSeries, analysisMode]);
 
   // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
   // 現金・PayPay等はpaymentMethodIdをそのまま使う）
@@ -3830,7 +3828,6 @@ export default function App() {
               <button
                 onClick={() => {
                   setIsCategoryDrilldownOpen(false);
-                  setIsCategoryPickerOpen(false);
                 }}
                 className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
               >
@@ -3838,93 +3835,48 @@ export default function App() {
               </button>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
-              {/* 期間切り替え：月別／年別 */}
-              <div className="grid grid-cols-2 bg-slate-900/70 p-1.5 rounded-2xl border border-slate-700/50 w-full max-w-[200px] gap-1">
-                {[
-                  { id: 'monthly', label: '月別' },
-                  { id: 'yearly', label: '年別' },
-                ].map(({ id, label }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setCategoryPeriodMode(id)}
-                    className={`py-2 px-3 rounded-xl text-sm font-medium text-center transition-all ${
-                      categoryPeriodMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+            {/* 年選択（月間分析から開いた時だけ。年間分析から開いた時は全期間をまとめて
+                見るため不要。月別/年別はここで切り替えさせず、開いた元画面のanalysisMode
+                をそのまま引き継ぐ） */}
+            {analysisMode !== 'yearly' && (
+              <div className="flex items-center justify-between bg-slate-900/70 border border-slate-700/50 rounded-2xl px-1.5 py-1.5 w-full max-w-[160px]">
+                <button
+                  type="button"
+                  onClick={() => setAnalysisYear((y) => y - 1)}
+                  className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  title="前年"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-sm font-bold text-white px-2">{analysisYear}年</span>
+                <button
+                  type="button"
+                  onClick={() => setAnalysisYear((y) => y + 1)}
+                  className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                  title="翌年"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
+            )}
 
-              {/* 年選択（月別のときだけ。年別は全期間をまとめて見るため不要） */}
-              {categoryPeriodMode === 'monthly' && (
-                <div className="flex items-center justify-between bg-slate-900/70 border border-slate-700/50 rounded-2xl px-1.5 py-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setAnalysisYear((y) => y - 1)}
-                    className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                    title="前年"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span className="text-sm font-bold text-white px-2">{analysisYear}年</span>
-                  <button
-                    type="button"
-                    onClick={() => setAnalysisYear((y) => y + 1)}
-                    className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                    title="翌年"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* カテゴリ選択（プルダウン。選択中のアイコン＋名前をトリガーに表示） */}
+            {/* カテゴリ選択（OS標準のネイティブselect。タップでOSのピッカーが開く） */}
             <div className="relative">
-              <button
-                type="button"
-                onClick={() => setIsCategoryPickerOpen((open) => !open)}
-                className="w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-700/60 rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-200"
+              {(() => {
+                const cat = CATEGORIES.find((c) => c.id === analysisCategoryId) || CATEGORIES[0];
+                const IconComponent = cat.icon;
+                return <IconComponent className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />;
+              })()}
+              <select
+                value={analysisCategoryId || CATEGORIES[0]?.id || ''}
+                onChange={(e) => setAnalysisCategoryId(e.target.value)}
+                className="w-full appearance-none bg-slate-900/70 border border-slate-700/60 rounded-xl pl-10 pr-9 py-2.5 text-sm font-medium text-slate-200 focus:outline-none focus:border-indigo-500"
               >
-                {(() => {
-                  const cat = CATEGORIES.find((c) => c.id === analysisCategoryId) || CATEGORIES[0];
-                  const IconComponent = cat.icon;
-                  return (
-                    <span className="flex items-center gap-2">
-                      <IconComponent className="w-4 h-4 text-indigo-400 shrink-0" />
-                      {cat.name}
-                    </span>
-                  );
-                })()}
-                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isCategoryPickerOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {isCategoryPickerOpen && (
-                <div className="absolute z-10 mt-1.5 w-full max-h-64 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5">
-                  {CATEGORIES.map((c) => {
-                    const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
-                    const IconComponent = c.icon;
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setAnalysisCategoryId(c.id);
-                          setIsCategoryPickerOpen(false);
-                        }}
-                        className={`w-full flex items-center gap-2 px-3.5 py-2 text-sm font-medium transition-colors ${
-                          selected ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800'
-                        }`}
-                      >
-                        <IconComponent className="w-4 h-4 shrink-0" />
-                        {c.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+                {CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             </div>
 
             {/* サマリー（グラフ自体の見出し数字と重複しないよう、月別は「年合計」、
@@ -3937,14 +3889,14 @@ export default function App() {
                 </div>
                 <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    {categoryPeriodMode === 'monthly' ? '月平均' : '年平均'}
+                    {analysisMode === 'yearly' ? '年平均' : '月平均'}
                   </p>
                   <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(categoryPeriodSummary.average).toLocaleString()}</div>
                 </div>
                 {categoryPeriodSummary.showMax && (
                   <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 col-span-2">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
+                      {analysisMode === 'yearly' ? '最も支出が多かった年' : '最も支出が多かった月'}
                     </p>
                     {categoryPeriodSummary.max ? (
                       <div className="mt-2 flex items-baseline gap-2">
