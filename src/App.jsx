@@ -656,6 +656,37 @@ function parseTransactionsFromRows(rawLines) {
   return candidates.slice(0, 50);
 }
 
+// 期間切替バー（月間タブ・年間分析タブで共有）。表示するラベルと前後ボタンの
+// ハンドラだけを差し替え、見た目（幅・余白・背景・矢印位置）は常に同じにする。
+function PeriodNavigator({ label, onPrev, onNext, prevTitle, nextTitle }) {
+  return (
+    <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-3">
+      <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <button
+          onClick={onPrev}
+          className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+          title={prevTitle}
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+
+        <div className="flex items-center space-x-2">
+          <Calendar className="w-5 h-5 text-indigo-400" />
+          <span className="text-lg font-bold tracking-wide text-white">{label}</span>
+        </div>
+
+        <button
+          onClick={onNext}
+          className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+          title={nextTitle}
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   // 現在選択されている年月 (YYYY-MM) — 実際の今日の日付から算出
   const [currentMonth, setCurrentMonth] = useState(currentMonthKey);
@@ -1951,35 +1982,26 @@ export default function App() {
         </div>
       </header>
 
-      {/* 2. 月切替ナビゲーションバー（分析タブの「年間」「カテゴリ」表示中は、月の概念を
-          使わないため非表示にする。分析期間の選択UIが2か所に重複するのを避けるため、
-          CSSで隠すのではなくレンダリング自体をスキップする） */}
-      {!(activeTab === 'analysis' && analysisMode !== 'monthly') && (
-        <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-3">
-          <div className="max-w-6xl mx-auto flex items-center justify-between">
-            <button
-              onClick={() => handleMonthChange(-1)}
-              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="前月"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-center space-x-2">
-              <Calendar className="w-5 h-5 text-indigo-400" />
-              <span className="text-lg font-bold tracking-wide text-white">{formattedMonth}</span>
-            </div>
-
-            <button
-              onClick={() => handleMonthChange(1)}
-              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="次月"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-      )}
+      {/* 2. 期間切替バー（月間タブ・年間分析タブで同じPeriodNavigatorを共有し、ラベルと
+          ハンドラだけ差し替える。カテゴリ分析は全期間の推移を見るため期間の概念が
+          無く、非表示にする。CSSで隠すのではなくレンダリング自体をスキップする） */}
+      {activeTab === 'analysis' && analysisMode === 'yearly' ? (
+        <PeriodNavigator
+          label={`${analysisYear}年`}
+          onPrev={() => setAnalysisYear((y) => y - 1)}
+          onNext={() => setAnalysisYear((y) => y + 1)}
+          prevTitle="前年"
+          nextTitle="翌年"
+        />
+      ) : !(activeTab === 'analysis' && analysisMode === 'category') ? (
+        <PeriodNavigator
+          label={formattedMonth}
+          onPrev={() => handleMonthChange(-1)}
+          onNext={() => handleMonthChange(1)}
+          prevTitle="前月"
+          nextTitle="次月"
+        />
+      ) : null}
 
       {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6 pb-24 sm:pb-6">
@@ -2703,24 +2725,6 @@ export default function App() {
               </>
             ) : analysisMode === 'yearly' ? (
               <>
-                <div className="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 rounded-2xl px-2 py-1.5 max-w-xs">
-                  <button
-                    onClick={() => setAnalysisYear((y) => y - 1)}
-                    className="shrink-0 p-2 rounded-xl hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                    title="前年"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <h2 className="text-base font-bold text-white px-2 text-center">{analysisYear}年</h2>
-                  <button
-                    onClick={() => setAnalysisYear((y) => y + 1)}
-                    className="shrink-0 p-2 rounded-xl hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                    title="翌年"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </div>
-
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">年間支出</p>
