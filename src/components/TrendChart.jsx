@@ -53,14 +53,6 @@ export default function TrendChart({ series }) {
     }
   }, [series]);
 
-  if (!series.length) {
-    return (
-      <div className="py-12 text-center text-sm text-slate-500">
-        データがまだありません。利用明細を記録すると、ここに月別の推移が表示されます。
-      </div>
-    );
-  }
-
   const lastIdx = series.length - 1;
   const neededWidth = PAD_LEFT + PAD_RIGHT + Math.max(series.length - 1, 0) * MIN_GAP
     + (series.length === 1 ? 60 : 0);
@@ -94,6 +86,14 @@ export default function TrendChart({ series }) {
     });
     setActiveIndex(closest);
   }, [series, width]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!series.length) {
+    return (
+      <div className="py-12 text-center text-sm text-slate-500">
+        データがまだありません。利用明細を記録すると、ここに月別の推移が表示されます。
+      </div>
+    );
+  }
 
   return (
     <div>

@@ -3175,12 +3175,12 @@ export default function App() {
               key={id}
               type="button"
               onClick={() => setActiveTab(id)}
-              className={`flex flex-col items-center justify-center gap-0.5 py-2 min-w-0 transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 py-2.5 min-w-0 min-h-[56px] transition-colors ${
                 activeTab === id ? 'text-indigo-400' : 'text-slate-500'
               }`}
             >
-              <Icon className="w-5 h-5 shrink-0" />
-              <span className="text-[10px] font-medium truncate max-w-full">{label}</span>
+              <Icon className="w-6 h-6 shrink-0" />
+              <span className="text-xs font-medium truncate max-w-full">{label}</span>
             </button>
           ))}
         </div>
@@ -3908,7 +3908,7 @@ export default function App() {
         </div>
       )}
 
-      <p className="text-center text-[11px] text-slate-600 py-6 px-4">
+      <p className="text-center text-[11px] text-slate-600 pt-6 pb-24 sm:pb-6 px-4">
         {authUser.isAnonymous
           ? 'データはこの端末に保存されます。クラウドにも自動バックアップされますが、他の端末と同期するにはアカウント設定が必要です。'
           : `${authUser.email} としてログイン中。データは端末をまたいで自動同期されます。`}
