@@ -663,7 +663,7 @@ export default function App() {
   // 確認待ちの利用通知から「このカードを追加する」で開いた場合、そのカード保存後に
   // 続けて明細を作成し、確認待ちから消すために覚えておくID
   const [resolvingPendingId, setResolvingPendingId] = useState(null);
-  // 確認待ち一覧で「既存カードに紐付ける」プルダウンの選択状態（明細id → cardId）
+  // 確認待ち一覧での支払い方法・カード選択state（明細id → { paymentMethodId, cardId }）
   const [pendingLinkChoice, setPendingLinkChoice] = useState({});
 
   // クレジットカードデータ（保存データがあればそれを、無ければサンプルを初期値に）
@@ -884,12 +884,14 @@ export default function App() {
   const [trendCardId, setTrendCardId] = useState('');
 
   // 新規明細フォームのステート
+  // merchant（店舗名）は検索・集計・店舗別分析に使う主表示名、memoは自由記述の補足メモ。
   const [newTx, setNewTx] = useState({
     paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
     cardId: cards[0]?.id || '',
     amount: '',
     date: new Date().toISOString().split('T')[0],
     category: 'food',
+    merchant: '',
     memo: '',
   });
 
@@ -1272,6 +1274,7 @@ export default function App() {
       amount: '',
       date: new Date().toISOString().split('T')[0],
       category: 'food',
+      merchant: '',
       memo: '',
     });
   };
@@ -1307,13 +1310,16 @@ export default function App() {
   };
 
   const handleOpenEditTransaction = (tx) => {
+    // merchantフィールド追加前の明細は、店舗名がmemoに入っている。編集画面では
+    // それを店舗名欄に出し、メモ欄は空にする（元々別々の情報ではなかったため）。
     setNewTx({
       paymentMethodId: tx.paymentMethodId || PAYMENT_METHOD_CREDIT_CARD_ID,
       cardId: tx.cardId || cards[0]?.id || '',
       amount: String(tx.amount),
       date: tx.date,
       category: tx.category,
-      memo: tx.memo || '',
+      merchant: tx.merchant || tx.memo || '',
+      memo: tx.merchant ? (tx.memo || '') : '',
     });
     setEditingTxId(tx.id);
     setIsAddTransactionOpen(true);
@@ -1358,7 +1364,8 @@ export default function App() {
           amount: Number(newTx.amount),
           date: newTx.date,
           category: newTx.category,
-          memo: newTx.memo || '利用明細',
+          merchant: newTx.merchant.trim() || '利用明細',
+          memo: newTx.memo.trim(),
         };
         delete updated.id;
         await setDoc(transactionDocRef(authUser.uid, editingTxId), updated);
@@ -1370,7 +1377,8 @@ export default function App() {
           amount: Number(newTx.amount),
           date: newTx.date,
           category: newTx.category,
-          memo: newTx.memo || '利用明細',
+          merchant: newTx.merchant.trim() || '利用明細',
+          memo: newTx.memo.trim(),
           source: 'manual',
         };
         await setDoc(transactionDocRef(authUser.uid, id), newEntry);
@@ -1420,7 +1428,7 @@ export default function App() {
         // 確認待ちの利用通知から「このカードを追加する」で来た場合は、新しく
         // 作ったカードの明細として登録し、確認待ちからは消す。
         if (pendingItem) {
-          await handleResolvePendingToTransaction(pendingItem, id);
+          await handleResolvePendingToTransaction(pendingItem, PAYMENT_METHOD_CREDIT_CARD_ID, id);
         }
       }
     } catch (err) {
@@ -1432,29 +1440,40 @@ export default function App() {
   };
 
   // 確認待ちの利用通知を、指定したカードの明細として登録し、確認待ちからは削除する
-  const handleResolvePendingToTransaction = async (item, cardId) => {
-    if (!authUser || !cardId) return;
+  // paymentMethodIdが「クレジットカード」タイプの場合だけcardIdを使う。
+  // それ以外（現金・PayPay等）はcardIdをnullで保存する。
+  const handleResolvePendingToTransaction = async (item, paymentMethodId, cardId = null) => {
+    if (!authUser || !paymentMethodId) return;
     // Gmail取込側の確認待ちドキュメントは `p-gmail-<messageId>` というidで作られているので、
     // 明細側も同じmessageIdから作る（万一同じメールが将来また処理されても上書きで済む）。
     const messageId = item.id.startsWith('p-gmail-') ? item.id.slice('p-gmail-'.length) : item.id;
     await setDoc(transactionDocRef(authUser.uid, `t-gmail-${messageId}`), {
-      cardId,
+      cardId: cardId || null,
+      paymentMethodId,
       amount: Number(item.amount) || 0,
       date: item.date || new Date().toISOString().split('T')[0],
       category: item.category || 'other',
-      memo: item.merchant || item.issuerNameGuess || '利用明細',
-      paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+      merchant: item.merchant || item.issuerNameGuess || '利用明細',
+      memo: '',
       source: 'email',
     });
     await deleteDoc(pendingImportDocRef(authUser.uid, item.id));
   };
 
-  const handleLinkPendingToExistingCard = async (item) => {
+  // 確認待ち1件ごとの「支払い方法」選択のデフォルト値（クレジットカードと推定して開始）
+  const getPendingChoice = (item) => pendingLinkChoice[item.id] || { paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID, cardId: cards[0]?.id || '' };
+
+  const handleRegisterPending = async (item) => {
     if (!authUser) return;
-    const cardId = pendingLinkChoice[item.id] || cards[0]?.id;
-    if (!cardId) return;
+    const choice = getPendingChoice(item);
+    const selectedMethod = paymentMethods.find((m) => m.id === choice.paymentMethodId);
+    const isCreditCard = selectedMethod ? selectedMethod.type === 'credit_card' : choice.paymentMethodId === PAYMENT_METHOD_CREDIT_CARD_ID;
+    if (isCreditCard && !choice.cardId) {
+      alert('カードを選択してください。');
+      return;
+    }
     try {
-      await handleResolvePendingToTransaction(item, cardId);
+      await handleResolvePendingToTransaction(item, choice.paymentMethodId, isCreditCard ? choice.cardId : null);
     } catch (err) {
       console.error(err);
       alert('明細の登録に失敗しました。通信環境をご確認ください。');
@@ -1813,7 +1832,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* 明細追加ボタン & アカウント */}
+          {/* 確認待ち・記録・同期。優先度順（確認待ち→記録→同期）に並べ、
+              同期は場所を取らないようアイコンのみにしてある。 */}
           <div className="flex items-center gap-2">
             {pendingImports.length > 0 && (
               <button
@@ -1828,13 +1848,6 @@ export default function App() {
               </button>
             )}
             <button
-              onClick={() => setIsAccountModalOpen(true)}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title={authUser.isAnonymous ? 'この端末専用（未ログイン）' : `ログイン中: ${authUser.email}`}
-            >
-              <Cloud className="w-4 h-4" />
-            </button>
-            <button
               onClick={() => {
                 setEditingTxId(null);
                 resetNewTxForm();
@@ -1844,6 +1857,13 @@ export default function App() {
             >
               <Plus className="w-4 h-4" />
               <span>記録</span>
+            </button>
+            <button
+              onClick={() => setIsAccountModalOpen(true)}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title={authUser.isAnonymous ? 'この端末専用（未ログイン）' : `ログイン中: ${authUser.email}`}
+            >
+              <Cloud className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -1875,11 +1895,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* 3. メインコンテンツ領域 */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6">
+      {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6 pb-24 sm:pb-6">
 
-        {/* ナビゲーションタブ（スマホは3+2のグリッド、sm以上は横一列） */}
-        <div className="grid grid-cols-3 sm:flex gap-1.5 sm:gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-lg mx-auto sm:mx-0">
+        {/* ナビゲーションタブ（sm以上でのみ表示。モバイルは下部固定タブバーに切り替え） */}
+        <div className="hidden sm:flex gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`min-w-0 sm:flex-1 py-2 px-1.5 sm:px-3 rounded-xl text-xs sm:text-sm font-medium transition-all flex items-center justify-center gap-1 sm:gap-2 ${
@@ -2293,7 +2313,7 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-semibold text-white text-sm sm:text-base truncate">
-                              {tx.memo}
+                              {tx.merchant || tx.memo}
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
                               <div>{tx.date}</div>
@@ -2411,7 +2431,7 @@ export default function App() {
                                 <IconComponent className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
-                                <p className="text-sm font-medium text-white truncate">{tx.memo}</p>
+                                <p className="text-sm font-medium text-white truncate">{tx.merchant || tx.memo}</p>
                                 <p className="text-xs text-slate-400 truncate">{getPaymentLabel(tx)}</p>
                               </div>
                             </div>
@@ -2893,6 +2913,33 @@ export default function App() {
 
       </main>
 
+      {/* モバイル専用: 画面下部に固定するタブバー（sm以上では上部の横並びタブを使うため非表示） */}
+      <nav
+        className="sm:hidden fixed bottom-0 inset-x-0 z-30 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 pb-[env(safe-area-inset-bottom)]"
+      >
+        <div className="grid grid-cols-5">
+          {[
+            { id: 'dashboard', label: 'ホーム', Icon: PieChart },
+            { id: 'transactions', label: '明細', Icon: List },
+            { id: 'calendar', label: 'カレンダー', Icon: Calendar },
+            { id: 'analysis', label: '分析', Icon: BarChart3 },
+            { id: 'cards', label: 'カード', Icon: Wallet },
+          ].map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActiveTab(id)}
+              className={`flex flex-col items-center justify-center gap-0.5 py-2 min-w-0 transition-colors ${
+                activeTab === id ? 'text-indigo-400' : 'text-slate-500'
+              }`}
+            >
+              <Icon className="w-5 h-5 shrink-0" />
+              <span className="text-[10px] font-medium truncate max-w-full">{label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+
       {/* 書き出し・読み込み用の隠しファイル入力（どのタブからでも使えるよう常時マウント） */}
       <input
         ref={importFileRef}
@@ -3005,12 +3052,24 @@ export default function App() {
                 </div>
               </div>
 
-              {/* メモ */}
+              {/* 店舗名 */}
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">メモ / 店舗名</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">店舗名</label>
                 <input
                   type="text"
                   placeholder="例: セブンイレブン、Amazonなど"
+                  value={newTx.merchant}
+                  onChange={(e) => setNewTx({ ...newTx, merchant: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              {/* メモ（自由記述） */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">メモ（任意）</label>
+                <input
+                  type="text"
+                  placeholder="例: 誕生日プレゼント"
                   value={newTx.memo}
                   onChange={(e) => setNewTx({ ...newTx, memo: e.target.value })}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
@@ -3425,7 +3484,7 @@ export default function App() {
                     <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
                       <span>利用日: {item.date || '不明'}</span>
                       <span>
-                        推定カード: {item.issuerNameGuess || '不明'}
+                        推定される支払い方法: {item.issuerNameGuess || '不明'}
                         {item.last4Guess ? `（下4桁: ${item.last4Guess}）` : ''}
                       </span>
                     </div>
@@ -3434,42 +3493,64 @@ export default function App() {
                       判定理由: {item.reason || '不明'}
                     </p>
 
-                    {cards.length > 0 && (
-                      <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                        <select
-                          value={pendingLinkChoice[item.id] || cards[0]?.id || ''}
-                          onChange={(e) => setPendingLinkChoice((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                          className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
-                        >
-                          {cards.map((c) => (
-                            <option key={c.id} value={c.id}>{c.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => handleLinkPendingToExistingCard(item)}
-                          className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium whitespace-nowrap"
-                        >
-                          このカードに登録
-                        </button>
-                      </div>
-                    )}
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenAddCardFromPending(item)}
-                        className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-300 text-xs font-medium"
-                      >
-                        新しいカードとして追加
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleIgnorePendingImport(item)}
-                        className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-400 hover:text-red-400 text-xs font-medium"
-                      >
-                        無視する
-                      </button>
-                    </div>
+                    {(() => {
+                      const choice = getPendingChoice(item);
+                      const selectedMethod = paymentMethods.find((m) => m.id === choice.paymentMethodId);
+                      const isCreditCard = selectedMethod ? selectedMethod.type === 'credit_card' : choice.paymentMethodId === PAYMENT_METHOD_CREDIT_CARD_ID;
+                      const setChoice = (patch) => setPendingLinkChoice((prev) => ({ ...prev, [item.id]: { ...choice, ...patch } }));
+                      return (
+                        <div className="space-y-2 pt-1">
+                          <select
+                            value={choice.paymentMethodId}
+                            onChange={(e) => setChoice({ paymentMethodId: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                          >
+                            {[...paymentMethods].filter((m) => m.isActive !== false).sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)).map((m) => (
+                              <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                          </select>
+
+                          {isCreditCard && cards.length > 0 && (
+                            <select
+                              value={choice.cardId || cards[0]?.id || ''}
+                              onChange={(e) => setChoice({ cardId: e.target.value })}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                            >
+                              {cards.map((c) => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                              ))}
+                            </select>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleRegisterPending(item)}
+                            className="w-full py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium"
+                          >
+                            この内容で登録
+                          </button>
+
+                          <div className="flex gap-2">
+                            {isCreditCard && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAddCardFromPending(item)}
+                                className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-300 text-xs font-medium"
+                              >
+                                新しいカードを追加
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleIgnorePendingImport(item)}
+                              className="flex-1 py-1.5 rounded-lg border border-slate-700 hover:bg-slate-700/50 text-slate-400 hover:text-red-400 text-xs font-medium"
+                            >
+                              無視する
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
