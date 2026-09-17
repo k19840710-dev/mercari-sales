@@ -1148,6 +1148,12 @@ export default function App() {
   const [analysisCategoryId, setAnalysisCategoryId] = useState('');
   // カテゴリ分析: 月単位（選択中のanalysisYearの1〜12月）で見るか、年単位（全期間の年ごと）で見るか
   const [categoryPeriodMode, setCategoryPeriodMode] = useState('monthly'); // 'monthly' | 'yearly'
+  // 月間/年間分析のカテゴリ別支出の行をタップした時に開く詳細ドリルダウンモーダル
+  const [isCategoryDrilldownOpen, setIsCategoryDrilldownOpen] = useState(false);
+  const openCategoryDrilldown = (catId) => {
+    setAnalysisCategoryId(catId);
+    setIsCategoryDrilldownOpen(true);
+  };
 
   // 月間分析: 1日平均（その月の日数で割る。カレンダーの日数ベースで、記録が
   // あった日数ではない）
@@ -2037,9 +2043,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* 2. 期間切替バー（月間タブ・年間分析タブで同じPeriodNavigatorを共有し、ラベルと
-          ハンドラだけ差し替える。カテゴリ分析は全期間の推移を見るため期間の概念が
-          無く、非表示にする。CSSで隠すのではなくレンダリング自体をスキップする） */}
+      {/* 2. 期間切替バー（月間タブ・年間分析タブで同じPeriodNavigatorを常時共有し、
+          ラベルとハンドラだけ差し替える。画面切り替え時に表示/非表示が切り替わって
+          ガタつくことがないよう、常にどちらかを表示する） */}
       {activeTab === 'analysis' && analysisMode === 'yearly' ? (
         <PeriodNavigator
           label={`${analysisYear}年`}
@@ -2048,7 +2054,7 @@ export default function App() {
           prevTitle="前年"
           nextTitle="翌年"
         />
-      ) : !(activeTab === 'analysis' && analysisMode === 'category') ? (
+      ) : (
         <PeriodNavigator
           label={formattedMonth}
           onPrev={() => handleMonthChange(-1)}
@@ -2056,7 +2062,7 @@ export default function App() {
           prevTitle="前月"
           nextTitle="次月"
         />
-      ) : null}
+      )}
 
       {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
       <main className={`flex-1 max-w-6xl w-full mx-auto px-4 pb-24 sm:pb-6 ${activeTab === 'analysis' ? 'pt-4 space-y-5' : 'py-6 space-y-6'}`}>
@@ -2663,12 +2669,12 @@ export default function App() {
         {activeTab === 'analysis' && (
           <div className="space-y-4 animate-fadeIn">
 
-            {/* 月間/年間/カテゴリ 切り替え（支払い方法別は月間・年間の中に統合済み） */}
-            <div className="grid grid-cols-3 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md gap-1">
+            {/* 月間/年間 切り替え（支払い方法別・カテゴリ別は月間・年間の中に統合済み。
+                カテゴリの行をタップすると詳細モーダルが開く） */}
+            <div className="grid grid-cols-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-xs gap-1">
               {[
                 { id: 'monthly', label: '月間' },
                 { id: 'yearly', label: '年間' },
-                { id: 'category', label: 'カテゴリ' },
               ].map(({ id, label }) => (
                 <button
                   key={id}
@@ -2730,7 +2736,12 @@ export default function App() {
                       {categoryStats.filter((c) => c.amount > 0).map((cat) => {
                         const IconComponent = cat.icon;
                         return (
-                          <div key={cat.id} className="space-y-1">
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => openCategoryDrilldown(cat.id)}
+                            className="w-full text-left space-y-1 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
+                          >
                             <div className="flex items-center justify-between text-sm">
                               <div className="flex items-center space-x-2">
                                 <div className={`p-1.5 rounded-lg bg-slate-700 ${cat.color.split(' ')[1]}`}>
@@ -2749,7 +2760,7 @@ export default function App() {
                                 style={{ width: `${cat.percentage}%` }}
                               />
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -2778,7 +2789,7 @@ export default function App() {
                   )}
                 </div>
               </>
-            ) : analysisMode === 'yearly' ? (
+            ) : (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
@@ -2822,7 +2833,12 @@ export default function App() {
                       {yearlyCategoryStats.filter((c) => c.amount > 0).map((cat) => {
                         const IconComponent = cat.icon;
                         return (
-                          <div key={cat.id} className="space-y-1">
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => openCategoryDrilldown(cat.id)}
+                            className="w-full text-left space-y-1 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
+                          >
                             <div className="flex items-center justify-between text-sm">
                               <div className="flex items-center space-x-2">
                                 <div className={`p-1.5 rounded-lg bg-slate-700 ${cat.color.split(' ')[1]}`}>
@@ -2841,7 +2857,7 @@ export default function App() {
                                 style={{ width: `${cat.percentage}%` }}
                               />
                             </div>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -2864,125 +2880,6 @@ export default function App() {
                             <span className="font-bold text-white">¥{pm.amount.toLocaleString()}</span>
                             <span className="text-xs text-slate-400 ml-2">({pm.percentage}%)</span>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* 期間切り替え：月別／年別 */}
-                  <div className="grid grid-cols-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 w-full max-w-[200px] gap-1">
-                    {[
-                      { id: 'monthly', label: '月別' },
-                      { id: 'yearly', label: '年別' },
-                    ].map(({ id, label }) => (
-                      <button
-                        key={id}
-                        onClick={() => setCategoryPeriodMode(id)}
-                        className={`py-2 px-3 rounded-xl text-sm font-medium text-center transition-all ${
-                          categoryPeriodMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* 年選択（月別のときだけ。年別は全期間をまとめて見るため不要） */}
-                  {categoryPeriodMode === 'monthly' && (
-                    <div className="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 rounded-2xl px-1.5 py-1.5">
-                      <button
-                        onClick={() => setAnalysisYear((y) => y - 1)}
-                        className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                        title="前年"
-                      >
-                        <ChevronLeft className="w-4 h-4" />
-                      </button>
-                      <span className="text-sm font-bold text-white px-2">{analysisYear}年</span>
-                      <button
-                        onClick={() => setAnalysisYear((y) => y + 1)}
-                        className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                        title="翌年"
-                      >
-                        <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* カテゴリ切り替え（横スクロールのチップ。プルダウンは廃止） */}
-                <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 sm:mx-0 sm:px-0">
-                  {CATEGORIES.map((c) => {
-                    const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
-                    const IconComponent = c.icon;
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => setAnalysisCategoryId(c.id)}
-                        className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors ${
-                          selected ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        <IconComponent className="w-4 h-4 shrink-0" />
-                        {c.name}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* サマリー */}
-                {categoryPeriodSummary && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        {categoryPeriodMode === 'monthly' ? '今月の金額' : '今年の金額'}
-                      </p>
-                      <div className="mt-2 text-xl font-extrabold text-white">¥{categoryPeriodSummary.current.value.toLocaleString()}</div>
-                      {categoryPeriodSummary.diffPct !== null && (
-                        <p className={`mt-1 text-[11px] font-semibold ${categoryPeriodSummary.diff > 0 ? 'text-rose-400' : categoryPeriodSummary.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                          {categoryPeriodSummary.diff > 0 ? '▲' : categoryPeriodSummary.diff < 0 ? '▼' : '―'}
-                          {' '}{Math.abs(categoryPeriodSummary.diffPct).toFixed(1)}% {categoryPeriodMode === 'monthly' ? '前月比' : '前年比'}
-                        </p>
-                      )}
-                    </div>
-                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        {categoryPeriodMode === 'monthly' ? '月平均' : '年平均'}
-                      </p>
-                      <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(categoryPeriodSummary.average).toLocaleString()}</div>
-                    </div>
-                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl col-span-2">
-                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
-                      </p>
-                      {categoryPeriodSummary.max ? (
-                        <div className="mt-2 flex items-baseline gap-2">
-                          <span className="text-lg font-bold text-white">{categoryPeriodSummary.max.fullLabel}</span>
-                          <span className="text-indigo-400 font-semibold">¥{categoryPeriodSummary.max.value.toLocaleString()}</span>
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-slate-500 text-sm">データがありません</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  <TrendChart series={categoryPeriodSeries} />
-                </div>
-
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  {categoryPeriodSeries.filter((p) => p.value > 0).length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
-                  ) : (
-                    <div className="divide-y divide-slate-700/50">
-                      {categoryPeriodSeries.map((m) => (
-                        <div key={m.key} className="py-2 flex items-center justify-between gap-3">
-                          <span className="text-sm text-slate-300">{m.fullLabel}</span>
-                          <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
@@ -3908,7 +3805,156 @@ export default function App() {
         </div>
       )}
 
-      {/* 10. モーダル: アカウント（クラウド同期） */}
+      {/* 10. モーダル: カテゴリ別支出の詳細（月間/年間分析のカテゴリ行タップで開く） */}
+      {isCategoryDrilldownOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                {(() => {
+                  const cat = CATEGORIES.find((c) => c.id === analysisCategoryId) || CATEGORIES[0];
+                  const IconComponent = cat.icon;
+                  return (
+                    <>
+                      <IconComponent className="w-5 h-5 text-indigo-400" />
+                      {cat.name}の推移
+                    </>
+                  );
+                })()}
+              </h3>
+              <button
+                onClick={() => setIsCategoryDrilldownOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {/* 期間切り替え：月別／年別 */}
+              <div className="grid grid-cols-2 bg-slate-900/70 p-1.5 rounded-2xl border border-slate-700/50 w-full max-w-[200px] gap-1">
+                {[
+                  { id: 'monthly', label: '月別' },
+                  { id: 'yearly', label: '年別' },
+                ].map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setCategoryPeriodMode(id)}
+                    className={`py-2 px-3 rounded-xl text-sm font-medium text-center transition-all ${
+                      categoryPeriodMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* 年選択（月別のときだけ。年別は全期間をまとめて見るため不要） */}
+              {categoryPeriodMode === 'monthly' && (
+                <div className="flex items-center justify-between bg-slate-900/70 border border-slate-700/50 rounded-2xl px-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setAnalysisYear((y) => y - 1)}
+                    className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="前年"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-sm font-bold text-white px-2">{analysisYear}年</span>
+                  <button
+                    type="button"
+                    onClick={() => setAnalysisYear((y) => y + 1)}
+                    className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    title="翌年"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* カテゴリ切り替え（横スクロールのチップ。別カテゴリへそのまま切り替えられる） */}
+            <div className="flex gap-2 overflow-x-auto -mx-6 px-6 pb-1">
+              {CATEGORIES.map((c) => {
+                const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
+                const IconComponent = c.icon;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setAnalysisCategoryId(c.id)}
+                    className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors ${
+                      selected ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-900/70 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <IconComponent className="w-4 h-4 shrink-0" />
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* サマリー */}
+            {categoryPeriodSummary && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    {categoryPeriodMode === 'monthly' ? '今月の金額' : '今年の金額'}
+                  </p>
+                  <div className="mt-2 text-xl font-extrabold text-white">¥{categoryPeriodSummary.current.value.toLocaleString()}</div>
+                  {categoryPeriodSummary.diffPct !== null && (
+                    <p className={`mt-1 text-[11px] font-semibold ${categoryPeriodSummary.diff > 0 ? 'text-rose-400' : categoryPeriodSummary.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                      {categoryPeriodSummary.diff > 0 ? '▲' : categoryPeriodSummary.diff < 0 ? '▼' : '―'}
+                      {' '}{Math.abs(categoryPeriodSummary.diffPct).toFixed(1)}% {categoryPeriodMode === 'monthly' ? '前月比' : '前年比'}
+                    </p>
+                  )}
+                </div>
+                <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    {categoryPeriodMode === 'monthly' ? '月平均' : '年平均'}
+                  </p>
+                  <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(categoryPeriodSummary.average).toLocaleString()}</div>
+                </div>
+                <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 col-span-2">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
+                  </p>
+                  {categoryPeriodSummary.max ? (
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span className="text-lg font-bold text-white">{categoryPeriodSummary.max.fullLabel}</span>
+                      <span className="text-indigo-400 font-semibold">¥{categoryPeriodSummary.max.value.toLocaleString()}</span>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-slate-500 text-sm">データがありません</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
+              <TrendChart series={categoryPeriodSeries} />
+            </div>
+
+            <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
+              {categoryPeriodSeries.filter((p) => p.value > 0).length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
+              ) : (
+                <div className="divide-y divide-slate-700/50">
+                  {categoryPeriodSeries.map((m) => (
+                    <div key={m.key} className="py-2 flex items-center justify-between gap-3">
+                      <span className="text-sm text-slate-300">{m.fullLabel}</span>
+                      <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 11. モーダル: アカウント（クラウド同期） */}
       {isAccountModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-sm w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
