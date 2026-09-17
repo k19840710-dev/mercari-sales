@@ -2671,7 +2671,7 @@ export default function App() {
 
             {/* 月間/年間 切り替え（支払い方法別・カテゴリ別は月間・年間の中に統合済み。
                 カテゴリの行をタップすると詳細モーダルが開く） */}
-            <div className="grid grid-cols-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-xs gap-1">
+            <div className="grid grid-cols-2 w-full bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 gap-1">
               {[
                 { id: 'monthly', label: '月間' },
                 { id: 'yearly', label: '年間' },
@@ -3874,25 +3874,31 @@ export default function App() {
               )}
             </div>
 
-            {/* カテゴリ切り替え（横スクロールのチップ。別カテゴリへそのまま切り替えられる） */}
-            <div className="flex gap-2 overflow-x-auto -mx-6 px-6 pb-1">
-              {CATEGORIES.map((c) => {
-                const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
-                const IconComponent = c.icon;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setAnalysisCategoryId(c.id)}
-                    className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors ${
-                      selected ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-900/70 text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <IconComponent className="w-4 h-4 shrink-0" />
-                    {c.name}
-                  </button>
-                );
-              })}
+            {/* カテゴリ切り替え（横スクロールのチップ。別カテゴリへそのまま切り替えられる。
+                右端にフェードをかけ、まだ続きがある＝スクロールできることを示す） */}
+            <div className="relative -mx-6">
+              <div className="flex gap-2 overflow-x-auto px-6 pb-1">
+                {CATEGORIES.map((c) => {
+                  const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
+                  const IconComponent = c.icon;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setAnalysisCategoryId(c.id)}
+                      className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors border ${
+                        selected
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-md'
+                          : 'bg-slate-700/60 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                      }`}
+                    >
+                      <IconComponent className="w-4 h-4 shrink-0" />
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="pointer-events-none absolute right-0 top-0 bottom-1 w-8 bg-gradient-to-l from-slate-800 to-transparent" />
             </div>
 
             {/* サマリー */}
@@ -3934,21 +3940,6 @@ export default function App() {
 
             <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
               <TrendChart series={categoryPeriodSeries} />
-            </div>
-
-            <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
-              {categoryPeriodSeries.filter((p) => p.value > 0).length === 0 ? (
-                <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
-              ) : (
-                <div className="divide-y divide-slate-700/50">
-                  {categoryPeriodSeries.map((m) => (
-                    <div key={m.key} className="py-2 flex items-center justify-between gap-3">
-                      <span className="text-sm text-slate-300">{m.fullLabel}</span>
-                      <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         </div>
