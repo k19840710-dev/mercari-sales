@@ -1108,14 +1108,13 @@ export default function App() {
     })).sort((a, b) => b.amount - a.amount);
   }, [monthlyTransactions, totalMonthlyAmount]);
 
-  // --- 分析タブ（月間・年間・カテゴリ・支払い方法）用の集計 ---
-  const [analysisMode, setAnalysisMode] = useState('monthly'); // 'monthly' | 'yearly' | 'category' | 'paymentMethod'
+  // --- 分析タブ（月間・年間・カテゴリ）用の集計 ---
+  const [analysisMode, setAnalysisMode] = useState('monthly'); // 'monthly' | 'yearly' | 'category'
   // 年間分析で見る年。月切替（currentMonth）とは独立させ、専用の前年/翌年ボタンで動かす。
   const [analysisYear, setAnalysisYear] = useState(() => Number(currentMonth.split('-')[0]));
-  // カテゴリ・支払い方法の推移で「どれを見るか」（ダッシュボードの月別推移とは
-  // 別に持つ。同じ選択肢を共有すると、片方の画面を触ると他方の表示も変わってしまうため）
+  // カテゴリの推移で「どれを見るか」（ダッシュボードの月別推移とは別に持つ。
+  // 同じ選択肢を共有すると、片方の画面を触ると他方の表示も変わってしまうため）
   const [analysisCategoryId, setAnalysisCategoryId] = useState('');
-  const [analysisPaymentMethodId, setAnalysisPaymentMethodId] = useState('');
 
   // 月間分析: 1日平均（その月の日数で割る。カレンダーの日数ベースで、記録が
   // あった日数ではない）
@@ -1200,15 +1199,6 @@ export default function App() {
     const catId = analysisCategoryId || CATEGORIES[0]?.id || '';
     return buildMonthlySeries(transactions.filter((t) => t.category === catId));
   }, [transactions, analysisCategoryId]);
-
-  // 支払い方法分析: 選んだ支払い方法1つの、データがある範囲の月別推移
-  const paymentMethodTrendSeries = useMemo(() => {
-    const pmId = analysisPaymentMethodId || paymentMethods[0]?.id || '';
-    return buildMonthlySeries(transactions.filter((t) => {
-      const tPmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
-      return tPmId === pmId;
-    }));
-  }, [transactions, analysisPaymentMethodId, paymentMethods]);
 
   // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
   // 現金・PayPay等はpaymentMethodIdをそのまま使う）
@@ -2592,18 +2582,17 @@ export default function App() {
         {activeTab === 'analysis' && (
           <div className="space-y-6 animate-fadeIn">
 
-            {/* 月間/年間/カテゴリ/支払い方法 切り替え */}
-            <div className="flex flex-wrap bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md gap-1">
+            {/* 月間/年間/カテゴリ 切り替え（支払い方法別は月間・年間の中に統合済み） */}
+            <div className="grid grid-cols-3 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md gap-1">
               {[
                 { id: 'monthly', label: '月間' },
                 { id: 'yearly', label: '年間' },
                 { id: 'category', label: 'カテゴリ' },
-                { id: 'paymentMethod', label: '支払い方法' },
               ].map(({ id, label }) => (
                 <button
                   key={id}
                   onClick={() => setAnalysisMode(id)}
-                  className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                  className={`py-2 px-3 rounded-xl text-sm font-medium text-center transition-all ${
                     analysisMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -2710,18 +2699,18 @@ export default function App() {
               </>
             ) : analysisMode === 'yearly' ? (
               <>
-                <div className="flex items-center justify-between max-w-xs">
+                <div className="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 rounded-2xl px-2 py-1.5 max-w-xs">
                   <button
                     onClick={() => setAnalysisYear((y) => y - 1)}
-                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    className="shrink-0 p-2 rounded-xl hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
                     title="前年"
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
-                  <h2 className="text-lg font-bold text-white">{analysisYear}年の分析</h2>
+                  <h2 className="text-base font-bold text-white px-2 text-center">{analysisYear}年の分析</h2>
                   <button
                     onClick={() => setAnalysisYear((y) => y + 1)}
-                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                    className="shrink-0 p-2 rounded-xl hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
                     title="翌年"
                   >
                     <ChevronRight className="w-5 h-5" />
@@ -2818,7 +2807,7 @@ export default function App() {
                   )}
                 </div>
               </>
-            ) : analysisMode === 'category' ? (
+            ) : (
               <>
                 <div className="flex items-center justify-between gap-3 max-w-md">
                   <h2 className="text-lg font-bold text-white shrink-0">カテゴリ別の推移</h2>
@@ -2843,40 +2832,6 @@ export default function App() {
                   ) : (
                     <div className="divide-y divide-slate-700/50">
                       {categoryTrendSeries.map((m) => (
-                        <div key={m.key} className="py-2 flex items-center justify-between gap-3">
-                          <span className="text-sm text-slate-300">{m.fullLabel}</span>
-                          <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between gap-3 max-w-md">
-                  <h2 className="text-lg font-bold text-white shrink-0">支払い方法別の推移</h2>
-                  <select
-                    value={analysisPaymentMethodId || paymentMethods[0]?.id || ''}
-                    onChange={(e) => setAnalysisPaymentMethodId(e.target.value)}
-                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  >
-                    {paymentMethods.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  <TrendChart series={paymentMethodTrendSeries} />
-                </div>
-
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  {paymentMethodTrendSeries.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
-                  ) : (
-                    <div className="divide-y divide-slate-700/50">
-                      {paymentMethodTrendSeries.map((m) => (
                         <div key={m.key} className="py-2 flex items-center justify-between gap-3">
                           <span className="text-sm text-slate-300">{m.fullLabel}</span>
                           <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
