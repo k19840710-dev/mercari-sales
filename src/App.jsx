@@ -1951,31 +1951,35 @@ export default function App() {
         </div>
       </header>
 
-      {/* 2. 月切替ナビゲーションバー */}
-      <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-3">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <button
-            onClick={() => handleMonthChange(-1)}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-            title="前月"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
+      {/* 2. 月切替ナビゲーションバー（分析タブの「年間」「カテゴリ」表示中は、月の概念を
+          使わないため非表示にする。分析期間の選択UIが2か所に重複するのを避けるため、
+          CSSで隠すのではなくレンダリング自体をスキップする） */}
+      {!(activeTab === 'analysis' && analysisMode !== 'monthly') && (
+        <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-3">
+          <div className="max-w-6xl mx-auto flex items-center justify-between">
+            <button
+              onClick={() => handleMonthChange(-1)}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="前月"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
 
-          <div className="flex items-center space-x-2">
-            <Calendar className="w-5 h-5 text-indigo-400" />
-            <span className="text-lg font-bold tracking-wide text-white">{formattedMonth}</span>
+            <div className="flex items-center space-x-2">
+              <Calendar className="w-5 h-5 text-indigo-400" />
+              <span className="text-lg font-bold tracking-wide text-white">{formattedMonth}</span>
+            </div>
+
+            <button
+              onClick={() => handleMonthChange(1)}
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="次月"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
           </div>
-
-          <button
-            onClick={() => handleMonthChange(1)}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-            title="次月"
-          >
-            <ChevronRight className="w-5 h-5" />
-          </button>
         </div>
-      </div>
+      )}
 
       {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6 pb-24 sm:pb-6">
@@ -2707,7 +2711,7 @@ export default function App() {
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
-                  <h2 className="text-base font-bold text-white px-2 text-center">{analysisYear}年の分析</h2>
+                  <h2 className="text-base font-bold text-white px-2 text-center">{analysisYear}年</h2>
                   <button
                     onClick={() => setAnalysisYear((y) => y + 1)}
                     className="shrink-0 p-2 rounded-xl hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
