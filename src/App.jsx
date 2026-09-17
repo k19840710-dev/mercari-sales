@@ -39,6 +39,7 @@ import {
   BarChart3,
 } from 'lucide-react';
 import TrendChart from './components/TrendChart.jsx';
+import DonutChart from './components/DonutChart.jsx';
 import {
   auth,
   db,
@@ -132,6 +133,13 @@ const CATEGORIES = [
   { id: 'investment', name: '投資', icon: TrendingUp, color: 'bg-teal-500 text-teal-500' },
   { id: 'other', name: 'その他', icon: HelpCircle, color: 'bg-gray-500 text-gray-500' },
 ];
+
+// カテゴリの色定義（例: 'bg-amber-500 text-amber-500'）から色名（'amber'）だけ取り出す。
+// ドーナツグラフはTailwindのクラス名を解釈できないSVGなので、実際の色に変換して渡す。
+function categoryColorName(cat) {
+  const m = cat.color.match(/bg-([a-z]+)-/);
+  return m ? m[1] : 'gray';
+}
 
 // 店名・利用先の文字列に含まれるキーワードから、カテゴリを推測するための対応表。
 // スクリーンショット読み取り（OCR）・Gmail自動取り込み（gmail-import/Code.gs）共通で使う。
@@ -880,8 +888,11 @@ export default function App() {
   const [filterCategory, setFilterCategory] = useState('all');
 
   // 月別推移グラフのステート
-  const [trendMode, setTrendMode] = useState('total'); // 'total' | 'card'
-  const [trendCardId, setTrendCardId] = useState('');
+  const [trendMode, setTrendMode] = useState('total'); // 'total' | 'paymentMethod' | 'category'
+  const [trendPaymentMethodId, setTrendPaymentMethodId] = useState('');
+  const [trendCategoryId, setTrendCategoryId] = useState('');
+  // ダッシュボードのカテゴリ別支出をリスト/円グラフのどちらで見るか
+  const [categoryViewMode, setCategoryViewMode] = useState('list'); // 'list' | 'donut'
 
   // 新規明細フォームのステート
   // merchant（店舗名）は検索・集計・店舗別分析に使う主表示名、memoは自由記述の補足メモ。
@@ -1163,14 +1174,23 @@ export default function App() {
       .sort((a, b) => b.amount - a.amount);
   }, [monthlyTransactions, paymentMethods, totalMonthlyAmount]);
 
-  // 月別支出推移（全期間・全カード or 特定カード）
+  // 月別支出推移（全体 / 特定の支払い方法1つ / 特定のカテゴリ1つ）
   const trendSeries = useMemo(() => {
-    const activeCardId = trendCardId || cards[0]?.id || '';
-    const relevant = trendMode === 'card'
-      ? transactions.filter((t) => t.cardId === activeCardId)
-      : transactions;
-    return buildMonthlySeries(relevant);
-  }, [transactions, trendMode, trendCardId, cards]);
+    if (trendMode === 'paymentMethod') {
+      const pmId = trendPaymentMethodId || paymentMethods[0]?.id || '';
+      const relevant = transactions.filter((t) => {
+        const tPmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
+        return tPmId === pmId;
+      });
+      return buildMonthlySeries(relevant);
+    }
+    if (trendMode === 'category') {
+      const catId = trendCategoryId || CATEGORIES[0]?.id || '';
+      const relevant = transactions.filter((t) => t.category === catId);
+      return buildMonthlySeries(relevant);
+    }
+    return buildMonthlySeries(transactions);
+  }, [transactions, trendMode, trendPaymentMethodId, trendCategoryId, paymentMethods]);
 
   // 前月比（月別推移カードのすぐ下で使う簡易サマリー）
   const monthOverMonth = useMemo(() => {
@@ -1949,246 +1969,88 @@ export default function App() {
 
         {/* --- タブ 1: ダッシュボード --- */}
         {activeTab === 'dashboard' && (
-          <div className="space-y-6 animate-fadeIn">
+          <div className="space-y-4 animate-fadeIn">
 
-            {/* 次回の支払い & 今月残りの支払予定額 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">次回の支払い</p>
-                {nextPayment ? (
-                  <div className="mt-2 flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-2xl font-extrabold text-white">
-                          {nextPayment.paymentDate.getMonth() + 1}月{nextPayment.paymentDate.getDate()}日
-                        </span>
-                        {nextPayment.daysUntil <= 3 && (
-                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 shrink-0">
-                            {nextPayment.daysUntil === 0 ? '今日' : `あと${nextPayment.daysUntil}日`}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-sm text-slate-300 truncate mt-1">{nextPayment.card.name}</div>
-                      <div className="text-xl font-bold text-indigo-400 mt-1">¥{nextPayment.amount.toLocaleString()}</div>
-                    </div>
-                    {nextPayment.daysUntil > 3 && (
-                      <span className="text-xs text-slate-400 shrink-0 mt-1">あと{nextPayment.daysUntil}日</span>
-                    )}
-                  </div>
-                ) : (
-                  <p className="mt-3 text-sm text-slate-500">予定なし（カードに締め日・支払日を設定してください）</p>
-                )}
+            {/* ① 今月の支出（最重要。先月比を添えて最も大きく表示） */}
+            <div className="bg-gradient-to-br from-indigo-600/25 to-purple-600/10 border border-indigo-500/30 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-4 opacity-10">
+                <TrendingUp className="w-28 h-28 text-indigo-300" />
               </div>
-
-              <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">今月残りの支払予定額</p>
-                <div className="mt-2 text-3xl font-extrabold text-white">¥{remainingThisMonthTotal.toLocaleString()}</div>
-                <p className="mt-2 text-xs text-slate-400">支払日がまだ来ていないカードの合計</p>
+              <p className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">今月の支出</p>
+              <div className="mt-1 text-4xl sm:text-5xl font-extrabold text-white">
+                ¥{totalMonthlyAmount.toLocaleString()}
               </div>
-            </div>
-
-            {/* ハイライトサマリーカード */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <TrendingUp className="w-24 h-24 text-indigo-400" />
-                </div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">今月の合計利用額</p>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-extrabold text-white">
-                    ¥{totalMonthlyAmount.toLocaleString()}
-                  </span>
-                </div>
-                {monthOverMonth ? (
-                  <p className={`mt-2 text-xs font-semibold ${monthOverMonth.diff > 0 ? 'text-rose-400' : monthOverMonth.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                    {monthOverMonth.diff > 0 ? '▲' : monthOverMonth.diff < 0 ? '▼' : '―'}
-                    {' '}
-                    {monthOverMonth.diff >= 0 ? '+' : '−'}¥{Math.abs(monthOverMonth.diff).toLocaleString()}
-                    {' '}
-                    （{monthOverMonth.diff >= 0 ? '+' : '−'}{Math.abs(monthOverMonth.pct).toFixed(1)}%） 先月比
-                  </p>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-400">
-                    登録カード {cards.length} 枚の総支払予定額
-                  </p>
-                )}
-              </div>
-
-              <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">今月の決済件数</p>
-                <div className="mt-2 flex items-baseline gap-1">
-                  <span className="text-3xl sm:text-4xl font-extrabold text-indigo-400">
-                    {monthlyTransactions.length}
-                  </span>
-                  <span className="text-slate-400 text-sm">件</span>
-                </div>
-                <p className="mt-2 text-xs text-slate-400">
-                  平均決済額: ¥{monthlyTransactions.length ? Math.round(totalMonthlyAmount / monthlyTransactions.length).toLocaleString() : 0}
+              {monthOverMonth ? (
+                <p className={`mt-3 text-sm font-semibold ${monthOverMonth.diff > 0 ? 'text-rose-400' : monthOverMonth.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  {monthOverMonth.diff > 0 ? '▲' : monthOverMonth.diff < 0 ? '▼' : '―'}
+                  {' '}
+                  {monthOverMonth.diff >= 0 ? '+' : '−'}¥{Math.abs(monthOverMonth.diff).toLocaleString()}
+                  {' '}
+                  （{monthOverMonth.diff >= 0 ? '+' : '−'}{Math.abs(monthOverMonth.pct).toFixed(1)}%） 先月比
                 </p>
-              </div>
-
-              <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">最も利用したカード</p>
-                {cardMonthlyStats.length > 0 ? (() => {
-                  const topCard = [...cardMonthlyStats].sort((a, b) => b.spent - a.spent)[0];
-                  return (
-                    <div className="mt-2">
-                      <div className="text-lg font-bold text-white truncate">{topCard.name}</div>
-                      <div className="text-indigo-400 font-semibold mt-0.5">
-                        ¥{topCard.spent.toLocaleString()}
-                      </div>
-                    </div>
-                  );
-                })() : (
-                  <p className="mt-2 text-slate-500 text-sm">データがありません</p>
-                )}
-              </div>
-            </div>
-
-            {/* 月別支出推移 */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-indigo-400" />
-                  月別支出推移
-                </h2>
-                <div className="flex items-center gap-2">
-                  <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
-                    <button
-                      onClick={() => setTrendMode('total')}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        trendMode === 'total' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      全カード合計
-                    </button>
-                    <button
-                      onClick={() => setTrendMode('card')}
-                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        trendMode === 'card' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      カード別
-                    </button>
-                  </div>
-                  {trendMode === 'card' && (
-                    <select
-                      value={trendCardId || cards[0]?.id || ''}
-                      onChange={(e) => setTrendCardId(e.target.value)}
-                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      {cards.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-              <TrendChart series={trendSeries} />
-            </div>
-
-            {/* クレジットカード別利用額（カードデザイン表示） */}
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <CreditCard className="w-5 h-5 text-indigo-400" />
-                  カード別利用状況
-                </h2>
-                <button
-                  onClick={() => {
-                    setEditingCardId(null);
-                    resetNewCardForm();
-                    setIsAddCardOpen(true);
-                  }}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1"
-                >
-                  <Plus className="w-3.5 h-3.5" /> カードを追加
-                </button>
-              </div>
-
-              {cards.length === 0 ? (
-                <div className="bg-slate-800/50 rounded-2xl p-8 text-center border border-dashed border-slate-700">
-                  <p className="text-slate-400 text-sm">クレジットカードが登録されていません</p>
-                  <button
-                    onClick={() => {
-                    setEditingCardId(null);
-                    resetNewCardForm();
-                    setIsAddCardOpen(true);
-                  }}
-                    className="mt-3 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium"
-                  >
-                    カードを追加する
-                  </button>
-                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {cardMonthlyStats.map((card) => {
-                    const theme = CARD_THEMES[card.theme] || CARD_THEMES.purple;
-                    return (
-                      <div
-                        key={card.id}
-                        className={`rounded-2xl p-5 shadow-xl border ${theme.bg} ${theme.border} relative flex flex-col justify-center gap-4 h-52 transition-transform duration-200 hover:-translate-y-1`}
-                      >
-                        {/* カード上部 */}
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${theme.badge}`}>
-                              {card.brand}
-                            </span>
-                            <h3 className="font-bold text-white text-sm mt-1.5 truncate max-w-[160px]">
-                              {card.name}
-                            </h3>
-                          </div>
-                          <span className="font-mono text-xs text-white/70">•••• {card.last4}</span>
-                        </div>
-
-                        {/* カード中央: 利用金額 */}
-                        <div>
-                          <span className="text-xs text-white/70">今月の利用額</span>
-                          <div className="text-xl font-black text-white tracking-tight">
-                            ¥{card.spent.toLocaleString()}
-                          </div>
-                        </div>
-
-                        {/* カード下部: ゲージ＆締め日情報 */}
-                        <div className="space-y-1.5">
-                          {card.limit > 0 && (
-                            <div>
-                              <div className="flex justify-between text-[10px] text-white/80 mb-1">
-                                <span>利用枠</span>
-                                <span>{card.percentage}% (上限: ¥{card.limit.toLocaleString()})</span>
-                              </div>
-                              <div className="w-full h-1.5 bg-black/30 rounded-full overflow-hidden backdrop-blur-sm">
-                                <div
-                                  className={`h-full rounded-full transition-all duration-500 ${
-                                    card.percentage > 80 ? 'bg-red-400' : 'bg-white'
-                                  }`}
-                                  style={{ width: `${Math.min(card.percentage, 100)}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
-                          <div className="flex justify-between items-center text-[10px] text-white/60 pt-0.5">
-                            <span>締日: {card.billingDay}</span>
-                            <span>支払日: 毎月{card.paymentDay}日</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <p className="mt-3 text-sm text-slate-400">先月のデータがありません</p>
               )}
             </div>
 
-            {/* カテゴリ別内訳 */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-              <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                <Tag className="w-5 h-5 text-indigo-400" />
-                カテゴリ別支出内訳
-              </h2>
+            {/* ② 支払予定（クレジットカードの今月残り＋次回を1枚にまとめる） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">支払予定（クレジットカード）</p>
+              {nextPayment ? (
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[11px] text-slate-500">今月残り</span>
+                    <div className="text-xl font-bold text-white">¥{remainingThisMonthTotal.toLocaleString()}</div>
+                  </div>
+                  <div className="text-right min-w-0">
+                    <span className="text-[11px] text-slate-500">
+                      次回 {nextPayment.paymentDate.getMonth() + 1}/{nextPayment.paymentDate.getDate()}
+                      {nextPayment.daysUntil <= 3 && (nextPayment.daysUntil === 0 ? '（今日）' : `（あと${nextPayment.daysUntil}日）`)}
+                    </span>
+                    <div className="text-sm font-semibold text-indigo-300 truncate">{nextPayment.card.name}</div>
+                    <div className="text-lg font-bold text-white">¥{nextPayment.amount.toLocaleString()}</div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">予定なし（カードに締め日・支払日を設定してください）</p>
+              )}
+            </div>
+
+            {/* ③ カテゴリ別支出（リスト/円グラフ切替） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-indigo-400" />
+                  カテゴリ別支出
+                </h2>
+                <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
+                  <button
+                    onClick={() => setCategoryViewMode('list')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      categoryViewMode === 'list' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    リスト
+                  </button>
+                  <button
+                    onClick={() => setCategoryViewMode('donut')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      categoryViewMode === 'donut' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    円グラフ
+                  </button>
+                </div>
+              </div>
 
               {totalMonthlyAmount === 0 ? (
                 <p className="text-slate-400 text-sm text-center py-6">この月の利用明細はありません。</p>
+              ) : categoryViewMode === 'donut' ? (
+                <DonutChart
+                  slices={categoryStats.map((cat) => ({ id: cat.id, label: cat.name, value: cat.amount, colorName: categoryColorName(cat) }))}
+                  centerLabel="今月の支出"
+                  centerValue={`¥${totalMonthlyAmount.toLocaleString()}`}
+                />
               ) : (
                 <div className="space-y-3">
                   {categoryStats.filter((c) => c.amount > 0).map((cat) => {
@@ -2207,7 +2069,6 @@ export default function App() {
                             <span className="text-xs text-slate-400 ml-2">({cat.percentage}%)</span>
                           </div>
                         </div>
-                        {/* プログレスバー */}
                         <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all duration-500 ${cat.color.split(' ')[0]}`}
@@ -2217,6 +2078,127 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+
+            {/* ④ 支払い方法別 */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <h2 className="text-base font-bold text-white mb-3 flex items-center gap-2">
+                <Wallet className="w-4 h-4 text-indigo-400" />
+                支払い方法別
+              </h2>
+              {paymentMethodMonthlyStats.length === 0 ? (
+                <p className="text-slate-400 text-sm text-center py-6">この月の支出はありません。</p>
+              ) : (
+                <div className="space-y-3">
+                  {paymentMethodMonthlyStats.map((pm) => (
+                    <div key={pm.id} className="space-y-1">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-slate-200">{pm.name}</span>
+                        <div className="text-right">
+                          <span className="font-bold text-white">¥{pm.amount.toLocaleString()}</span>
+                          <span className="text-xs text-slate-400 ml-2">({pm.percentage}%)</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                          style={{ width: `${pm.percentage}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ⑤ 月別支出推移（全体/支払い方法別/カテゴリ別） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-indigo-400" />
+                  月別支出推移
+                </h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
+                    <button
+                      onClick={() => setTrendMode('total')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'total' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      全体
+                    </button>
+                    <button
+                      onClick={() => setTrendMode('paymentMethod')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'paymentMethod' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      支払い方法別
+                    </button>
+                    <button
+                      onClick={() => setTrendMode('category')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'category' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      カテゴリ別
+                    </button>
+                  </div>
+                  {trendMode === 'paymentMethod' && (
+                    <select
+                      value={trendPaymentMethodId || paymentMethods[0]?.id || ''}
+                      onChange={(e) => setTrendPaymentMethodId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      {paymentMethods.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  {trendMode === 'category' && (
+                    <select
+                      value={trendCategoryId || CATEGORIES[0]?.id || ''}
+                      onChange={(e) => setTrendCategoryId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+              <TrendChart series={trendSeries} />
+            </div>
+
+            {/* ⑥ カード利用状況（簡易表示。詳細はカードタブへ） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-indigo-400" />
+                  カード利用状況
+                </h2>
+                <button
+                  onClick={() => setActiveTab('cards')}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-0.5"
+                >
+                  カード管理を見る <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {cardMonthlyStats.length === 0 ? (
+                <p className="text-slate-400 text-sm text-center py-4">クレジットカードが登録されていません</p>
+              ) : (
+                <div className="divide-y divide-slate-700/50">
+                  {cardMonthlyStats.map((card) => (
+                    <div key={card.id} className="py-2.5 flex items-center justify-between gap-3">
+                      <span className="text-sm text-slate-300 truncate">{card.name}</span>
+                      <span className="text-sm font-bold text-white shrink-0">¥{card.spent.toLocaleString()}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
