@@ -13,6 +13,7 @@ import {
   TrendingUp,
   X,
   Filter,
+  Search,
   Utensils,
   Car,
   HelpCircle,
@@ -886,6 +887,14 @@ export default function App() {
   // フィルター用ステート（明細タブ）
   const [filterCardId, setFilterCardId] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
+  const [filterPaymentMethodId, setFilterPaymentMethodId] = useState('all');
+  // 期間を指定した場合だけ、月切替（currentMonth）の範囲を超えて全期間から検索する。
+  // 空欄なら今まで通り「表示中の月」の明細だけを対象にする。
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterAmountMin, setFilterAmountMin] = useState('');
+  const [filterAmountMax, setFilterAmountMax] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // 月別推移グラフのステート
   const [trendMode, setTrendMode] = useState('total'); // 'total' | 'paymentMethod' | 'category'
@@ -1099,10 +1108,14 @@ export default function App() {
     })).sort((a, b) => b.amount - a.amount);
   }, [monthlyTransactions, totalMonthlyAmount]);
 
-  // --- 分析タブ（月間・年間）用の集計 ---
-  const [analysisMode, setAnalysisMode] = useState('monthly'); // 'monthly' | 'yearly'
+  // --- 分析タブ（月間・年間・カテゴリ・支払い方法）用の集計 ---
+  const [analysisMode, setAnalysisMode] = useState('monthly'); // 'monthly' | 'yearly' | 'category' | 'paymentMethod'
   // 年間分析で見る年。月切替（currentMonth）とは独立させ、専用の前年/翌年ボタンで動かす。
   const [analysisYear, setAnalysisYear] = useState(() => Number(currentMonth.split('-')[0]));
+  // カテゴリ・支払い方法の推移で「どれを見るか」（ダッシュボードの月別推移とは
+  // 別に持つ。同じ選択肢を共有すると、片方の画面を触ると他方の表示も変わってしまうため）
+  const [analysisCategoryId, setAnalysisCategoryId] = useState('');
+  const [analysisPaymentMethodId, setAnalysisPaymentMethodId] = useState('');
 
   // 月間分析: 1日平均（その月の日数で割る。カレンダーの日数ベースで、記録が
   // あった日数ではない）
@@ -1111,6 +1124,15 @@ export default function App() {
     const daysInMonth = new Date(year, month, 0).getDate();
     return daysInMonth > 0 ? totalMonthlyAmount / daysInMonth : 0;
   }, [currentMonth, totalMonthlyAmount]);
+
+  // 月間分析: 最も支出が多かった日（カレンダータブのdailyTotalsを流用）
+  const maxSpendingDay = useMemo(() => {
+    let best = null;
+    dailyTotals.forEach((v, date) => {
+      if (!best || v.total > best.total) best = { date, total: v.total };
+    });
+    return best;
+  }, [dailyTotals]);
 
   // 年間分析: 選択中の年の全明細
   const yearlyTransactions = useMemo(() => {
@@ -1155,6 +1177,38 @@ export default function App() {
       percentage: yearlyTotal > 0 ? Math.round(((map[cat.id] || 0) / yearlyTotal) * 100) : 0,
     })).sort((a, b) => b.amount - a.amount);
   }, [yearlyTransactions, yearlyTotal]);
+
+  // 年間分析: 支払い方法別（月間の集計と同じロジックを年間明細に適用）
+  const yearlyPaymentMethodStats = useMemo(() => {
+    const totals = new Map();
+    yearlyTransactions.forEach((t) => {
+      const pmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
+      totals.set(pmId, (totals.get(pmId) || 0) + Number(t.amount));
+    });
+    return [...totals.entries()]
+      .map(([id, amount]) => ({
+        id,
+        name: paymentMethods.find((m) => m.id === id)?.name || 'その他',
+        amount,
+        percentage: yearlyTotal > 0 ? Math.round((amount / yearlyTotal) * 100) : 0,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [yearlyTransactions, paymentMethods, yearlyTotal]);
+
+  // カテゴリ分析: 選んだカテゴリ1つの、データがある範囲の月別推移
+  const categoryTrendSeries = useMemo(() => {
+    const catId = analysisCategoryId || CATEGORIES[0]?.id || '';
+    return buildMonthlySeries(transactions.filter((t) => t.category === catId));
+  }, [transactions, analysisCategoryId]);
+
+  // 支払い方法分析: 選んだ支払い方法1つの、データがある範囲の月別推移
+  const paymentMethodTrendSeries = useMemo(() => {
+    const pmId = analysisPaymentMethodId || paymentMethods[0]?.id || '';
+    return buildMonthlySeries(transactions.filter((t) => {
+      const tPmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
+      return tPmId === pmId;
+    }));
+  }, [transactions, analysisPaymentMethodId, paymentMethods]);
 
   // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
   // 現金・PayPay等はpaymentMethodIdをそのまま使う）
@@ -1279,12 +1333,30 @@ export default function App() {
 
   // 明細一覧フィルター適用
   const filteredTransactions = useMemo(() => {
-    return monthlyTransactions.filter((t) => {
+    // 期間（開始日・終了日）を指定した場合だけ、表示中の月の外まで検索対象にする。
+    const base = (filterDateFrom || filterDateTo) ? transactions : monthlyTransactions;
+    const query = searchQuery.trim().toLowerCase();
+    const min = filterAmountMin !== '' ? Number(filterAmountMin) : null;
+    const max = filterAmountMax !== '' ? Number(filterAmountMax) : null;
+
+    return base.filter((t) => {
       const matchCard = filterCardId === 'all' || t.cardId === filterCardId;
       const matchCat = filterCategory === 'all' || t.category === filterCategory;
-      return matchCard && matchCat;
+      const tPmId = t.cardId ? PAYMENT_METHOD_CREDIT_CARD_ID : (t.paymentMethodId || 'pm-other');
+      const matchPm = filterPaymentMethodId === 'all' || tPmId === filterPaymentMethodId;
+      const matchFrom = !filterDateFrom || t.date >= filterDateFrom;
+      const matchTo = !filterDateTo || t.date <= filterDateTo;
+      const amount = Number(t.amount);
+      const matchMin = min === null || amount >= min;
+      const matchMax = max === null || amount <= max;
+      const haystack = `${t.merchant || ''} ${t.memo || ''}`.toLowerCase();
+      const matchQuery = !query || haystack.includes(query);
+      return matchCard && matchCat && matchPm && matchFrom && matchTo && matchMin && matchMax && matchQuery;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [monthlyTransactions, filterCardId, filterCategory]);
+  }, [
+    monthlyTransactions, transactions, filterCardId, filterCategory, filterPaymentMethodId,
+    filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, searchQuery,
+  ]);
 
   // --- アクションハンドラー ---
   const resetNewTxForm = () => {
@@ -2210,15 +2282,36 @@ export default function App() {
         {activeTab === 'transactions' && (
           <div className="space-y-4 animate-fadeIn">
 
-            {/* フィルター・検索バー */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 flex flex-wrap gap-3 items-center justify-between">
-              <div className="flex items-center space-x-2 text-sm text-slate-300">
-                <Filter className="w-4 h-4 text-indigo-400" />
-                <span className="font-medium">絞り込み:</span>
+            {/* 検索・フィルターバー */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 space-y-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="店舗名・メモで検索"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl text-sm pl-9 pr-3 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
               </div>
 
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                {/* カード絞り込み */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 text-xs text-slate-400 mr-1">
+                  <Filter className="w-3.5 h-3.5 text-indigo-400" />
+                  絞り込み:
+                </div>
+
+                <select
+                  value={filterPaymentMethodId}
+                  onChange={(e) => setFilterPaymentMethodId(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="all">すべての支払い方法</option>
+                  {paymentMethods.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+
                 <select
                   value={filterCardId}
                   onChange={(e) => setFilterCardId(e.target.value)}
@@ -2230,7 +2323,6 @@ export default function App() {
                   ))}
                 </select>
 
-                {/* カテゴリ絞り込み */}
                 <select
                   value={filterCategory}
                   onChange={(e) => setFilterCategory(e.target.value)}
@@ -2241,7 +2333,66 @@ export default function App() {
                     <option key={cat.id} value={cat.id}>{cat.name}</option>
                   ))}
                 </select>
+
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="date"
+                    value={filterDateFrom}
+                    onChange={(e) => setFilterDateFrom(e.target.value)}
+                    className="min-w-0 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    title="期間（開始日）。指定すると表示中の月に関わらず全期間から検索します"
+                  />
+                  <span className="text-slate-500 text-xs">〜</span>
+                  <input
+                    type="date"
+                    value={filterDateTo}
+                    onChange={(e) => setFilterDateTo(e.target.value)}
+                    className="min-w-0 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    title="期間（終了日）"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    value={filterAmountMin}
+                    onChange={(e) => setFilterAmountMin(e.target.value)}
+                    placeholder="金額 下限"
+                    className="w-24 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                  <span className="text-slate-500 text-xs">〜</span>
+                  <input
+                    type="number"
+                    value={filterAmountMax}
+                    onChange={(e) => setFilterAmountMax(e.target.value)}
+                    placeholder="上限"
+                    className="w-24 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                {(filterPaymentMethodId !== 'all' || filterCardId !== 'all' || filterCategory !== 'all' || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || searchQuery) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterPaymentMethodId('all');
+                      setFilterCardId('all');
+                      setFilterCategory('all');
+                      setFilterDateFrom('');
+                      setFilterDateTo('');
+                      setFilterAmountMin('');
+                      setFilterAmountMax('');
+                      setSearchQuery('');
+                    }}
+                    className="text-xs text-slate-400 hover:text-white underline underline-offset-2"
+                  >
+                    リセット
+                  </button>
+                )}
               </div>
+
+              {(filterDateFrom || filterDateTo) && (
+                <p className="text-[11px] text-amber-300">期間を指定しているため、表示中の月に関わらず全期間から検索しています。</p>
+              )}
             </div>
 
             {/* 書き出し・読み込み */}
@@ -2283,6 +2434,12 @@ export default function App() {
                     const paymentLabel = getPaymentLabel(tx);
                     const categoryObj = CATEGORIES.find((c) => c.id === tx.category) || CATEGORIES[CATEGORIES.length - 1];
                     const IconComponent = categoryObj.icon;
+                    // Gmail取込みの明細だけ、受信時刻（gmailReceivedAt）から時刻を出せる。
+                    // 手動入力等は時刻を持たないので日付だけ表示する。
+                    const receivedTime = tx.gmailReceivedAt ? new Date(tx.gmailReceivedAt) : null;
+                    const timeLabel = receivedTime
+                      ? ` ${String(receivedTime.getHours()).padStart(2, '0')}:${String(receivedTime.getMinutes()).padStart(2, '0')}`
+                      : '';
 
                     return (
                       <div
@@ -2298,8 +2455,8 @@ export default function App() {
                               {tx.merchant || tx.memo}
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                              <div>{tx.date}</div>
-                              <div className="text-slate-300 font-medium truncate">{paymentLabel}</div>
+                              <div>{tx.date}{timeLabel}</div>
+                              <div className="text-slate-300 font-medium truncate">{paymentLabel} ・ {categoryObj.name}</div>
                             </div>
                           </div>
                         </div>
@@ -2435,42 +2592,59 @@ export default function App() {
         {activeTab === 'analysis' && (
           <div className="space-y-6 animate-fadeIn">
 
-            {/* 月間/年間 切り替え */}
-            <div className="flex bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-xs">
-              <button
-                onClick={() => setAnalysisMode('monthly')}
-                className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all ${
-                  analysisMode === 'monthly' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                月間
-              </button>
-              <button
-                onClick={() => setAnalysisMode('yearly')}
-                className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all ${
-                  analysisMode === 'yearly' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                年間
-              </button>
+            {/* 月間/年間/カテゴリ/支払い方法 切り替え */}
+            <div className="flex flex-wrap bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md gap-1">
+              {[
+                { id: 'monthly', label: '月間' },
+                { id: 'yearly', label: '年間' },
+                { id: 'category', label: 'カテゴリ' },
+                { id: 'paymentMethod', label: '支払い方法' },
+              ].map(({ id, label }) => (
+                <button
+                  key={id}
+                  onClick={() => setAnalysisMode(id)}
+                  className={`flex-1 py-2 px-3 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
+                    analysisMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
 
             {analysisMode === 'monthly' ? (
               <>
                 <h2 className="text-lg font-bold text-white">{formattedMonth}の分析</h2>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">総支出</p>
-                    <div className="mt-2 text-2xl font-extrabold text-white">¥{totalMonthlyAmount.toLocaleString()}</div>
+                    <div className="mt-2 text-xl font-extrabold text-white">¥{totalMonthlyAmount.toLocaleString()}</div>
+                    {monthOverMonth && (
+                      <p className={`mt-1 text-[11px] font-semibold ${monthOverMonth.diff > 0 ? 'text-rose-400' : monthOverMonth.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                        {monthOverMonth.diff > 0 ? '▲' : monthOverMonth.diff < 0 ? '▼' : '―'}
+                        {' '}{Math.abs(monthOverMonth.pct).toFixed(1)}% 先月比
+                      </p>
+                    )}
                   </div>
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支出件数</p>
-                    <div className="mt-2 text-2xl font-extrabold text-white">{monthlyTransactions.length}<span className="text-sm text-slate-400 ml-1">件</span></div>
+                    <div className="mt-2 text-xl font-extrabold text-white">{monthlyTransactions.length}<span className="text-sm text-slate-400 ml-1">件</span></div>
                   </div>
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">1日平均</p>
-                    <div className="mt-2 text-2xl font-extrabold text-white">¥{Math.round(dailyAverageThisMonth).toLocaleString()}</div>
+                    <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(dailyAverageThisMonth).toLocaleString()}</div>
+                  </div>
+                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">最大支出日</p>
+                    {maxSpendingDay ? (
+                      <>
+                        <div className="mt-2 text-xl font-extrabold text-white">{Number(maxSpendingDay.date.slice(8, 10))}日</div>
+                        <p className="mt-1 text-[11px] text-slate-400">¥{maxSpendingDay.total.toLocaleString()}</p>
+                      </>
+                    ) : (
+                      <p className="mt-2 text-slate-500 text-sm">データなし</p>
+                    )}
                   </div>
                 </div>
 
@@ -2534,7 +2708,7 @@ export default function App() {
                   )}
                 </div>
               </>
-            ) : (
+            ) : analysisMode === 'yearly' ? (
               <>
                 <div className="flex items-center justify-between max-w-xs">
                   <button
@@ -2618,6 +2792,96 @@ export default function App() {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-indigo-400" />
+                    支払い方法別
+                  </h3>
+                  {yearlyTotal === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">この年の支出はありません。</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {yearlyPaymentMethodStats.map((pm) => (
+                        <div key={pm.id} className="flex items-center justify-between text-sm">
+                          <span className="text-slate-300">{pm.name}</span>
+                          <div className="text-right">
+                            <span className="font-bold text-white">¥{pm.amount.toLocaleString()}</span>
+                            <span className="text-xs text-slate-400 ml-2">({pm.percentage}%)</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : analysisMode === 'category' ? (
+              <>
+                <div className="flex items-center justify-between gap-3 max-w-md">
+                  <h2 className="text-lg font-bold text-white shrink-0">カテゴリ別の推移</h2>
+                  <select
+                    value={analysisCategoryId || CATEGORIES[0]?.id || ''}
+                    onChange={(e) => setAnalysisCategoryId(e.target.value)}
+                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <TrendChart series={categoryTrendSeries} />
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  {categoryTrendSeries.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
+                  ) : (
+                    <div className="divide-y divide-slate-700/50">
+                      {categoryTrendSeries.map((m) => (
+                        <div key={m.key} className="py-2 flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-300">{m.fullLabel}</span>
+                          <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-3 max-w-md">
+                  <h2 className="text-lg font-bold text-white shrink-0">支払い方法別の推移</h2>
+                  <select
+                    value={analysisPaymentMethodId || paymentMethods[0]?.id || ''}
+                    onChange={(e) => setAnalysisPaymentMethodId(e.target.value)}
+                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    {paymentMethods.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <TrendChart series={paymentMethodTrendSeries} />
+                </div>
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  {paymentMethodTrendSeries.length === 0 ? (
+                    <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
+                  ) : (
+                    <div className="divide-y divide-slate-700/50">
+                      {paymentMethodTrendSeries.map((m) => (
+                        <div key={m.key} className="py-2 flex items-center justify-between gap-3">
+                          <span className="text-sm text-slate-300">{m.fullLabel}</span>
+                          <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
