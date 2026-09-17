@@ -192,9 +192,9 @@ function checkCardEmails() {
             // 店名・カテゴリは、知っている店名リスト（KNOWN_MERCHANTS_）に一致する、
             // より具体的な方を採用する（例: 決済代行会社の領収書にしか店名が書かれて
             // いないことがあるため、先に処理された方を丸ごと勝ちにはしない）。
-            const existingIsKnownMerchant = !!(duplicate.memo && findKnownMerchant_(duplicate.memo));
+            const existingIsKnownMerchant = !!(duplicate.merchant && findKnownMerchant_(duplicate.merchant));
             const useExisting = existingIsKnownMerchant && !known;
-            const patchMemo = useExisting ? duplicate.memo : finalName;
+            const patchMerchant = useExisting ? duplicate.merchant : finalName;
             const patchCategory = useExisting ? (duplicate.category || finalCategory) : finalCategory;
             const patchReceivedAt = existingTime !== null
               ? new Date(Math.min(existingTime, messageTime)).toISOString()
@@ -207,17 +207,18 @@ function checkCardEmails() {
               console.warn(`重複通知だがカードの判定が一致しません（既存: ${duplicate.cardId} / 今回: ${cardId}）。カードはそのままに、店名・カテゴリのみ補完します。`);
             }
 
-            if (patchMemo === duplicate.memo && patchCategory === duplicate.category) {
+            if (patchMerchant === duplicate.merchant && patchCategory === duplicate.category) {
               console.log(`重複のためスキップ: ${date} ¥${amount} (${issuerName}/${merchant})`);
             } else {
-              console.log(`重複を補完: ${date} ¥${amount} → 店名「${patchMemo}」`);
+              console.log(`重複を補完: ${date} ¥${amount} → 店名「${patchMerchant}」`);
               firestoreRequest_(accessToken, 'patch', duplicate.url, {
                 fields: toFirestoreFields_({
                   cardId: duplicate.cardId || cardId,
                   amount,
                   date,
                   category: patchCategory,
-                  memo: patchMemo,
+                  merchant: patchMerchant,
+                  memo: '',
                   gmailReceivedAt: patchReceivedAt,
                   paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
                   source: 'email',
@@ -234,7 +235,8 @@ function checkCardEmails() {
             amount,
             date,
             category: finalCategory,
-            memo: finalName,
+            merchant: finalName,
+            memo: '',
             gmailReceivedAt: new Date(messageTime).toISOString(),
             paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
             source: 'email',
@@ -726,7 +728,9 @@ function findDuplicateTransaction_(accessToken, amount, date) {
       // スキーム＋ホストが付いていないので、そのままだと不正なURLになる。
       url: `https://firestore.googleapis.com/v1/${hit.document.name}`,
       cardId: (fields.cardId && fields.cardId.stringValue) || null,
-      memo: (fields.memo && fields.memo.stringValue) || null,
+      // merchant（店舗名）が本来の項目。merchant追加前に書き込まれた明細は
+      // 店舗名がmemoに入っているので、無ければそちらにフォールバックする。
+      merchant: (fields.merchant && fields.merchant.stringValue) || (fields.memo && fields.memo.stringValue) || null,
       category: (fields.category && fields.category.stringValue) || null,
       gmailReceivedAt: (fields.gmailReceivedAt && fields.gmailReceivedAt.stringValue) || null,
     };
