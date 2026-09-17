@@ -5,6 +5,7 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   PieChart,
   List,
   Trash2,
@@ -1150,6 +1151,7 @@ export default function App() {
   const [categoryPeriodMode, setCategoryPeriodMode] = useState('monthly'); // 'monthly' | 'yearly'
   // 月間/年間分析のカテゴリ別支出の行をタップした時に開く詳細ドリルダウンモーダル
   const [isCategoryDrilldownOpen, setIsCategoryDrilldownOpen] = useState(false);
+  const [isCategoryPickerOpen, setIsCategoryPickerOpen] = useState(false);
   const openCategoryDrilldown = (catId) => {
     setAnalysisCategoryId(catId);
     setIsCategoryDrilldownOpen(true);
@@ -1281,16 +1283,19 @@ export default function App() {
   const categoryPeriodSeries = categoryPeriodMode === 'yearly' ? categoryYearlySeries : categoryMonthlySeries;
   const categoryPeriodSummary = useMemo(() => {
     if (!categoryPeriodSeries.length) return null;
-    const lastIdx = categoryPeriodSeries.length - 1;
-    const current = categoryPeriodSeries[lastIdx];
-    const previous = lastIdx > 0 ? categoryPeriodSeries[lastIdx - 1] : null;
     const total = categoryPeriodSeries.reduce((sum, p) => sum + p.value, 0);
     const average = total / categoryPeriodSeries.length;
     const max = categoryPeriodSeries.reduce((m, p) => (p.value > m.value ? p : m), categoryPeriodSeries[0]);
-    const diff = previous ? current.value - previous.value : null;
-    const diffPct = previous && previous.value > 0 ? (diff / previous.value) * 100 : null;
-    return { current, average, max: max.value > 0 ? max : null, diff, diffPct };
-  }, [categoryPeriodSeries]);
+    if (categoryPeriodMode === 'monthly') {
+      // 月別: グラフ自体が直近月（多くの場合まだデータの無い月）の単月額を表示するので、
+      // ヘッドラインは同じ数字が重複しないよう「その年の合計額」にする。
+      return { headline: total, headlineLabel: '今年の合計金額', average, max: max.value > 0 ? max : null, showMax: true };
+    }
+    // 年別: 最新年（最後の点）の単年額をヘッドラインにする。最多年カードは、複数年
+    // データがある時だけ出す（1年しかない場合はヘッドラインと同じ数字の重複になるため）。
+    const current = categoryPeriodSeries[categoryPeriodSeries.length - 1];
+    return { headline: current.value, headlineLabel: '今年の金額', average, max: max.value > 0 ? max : null, showMax: categoryPeriodSeries.length > 1 };
+  }, [categoryPeriodSeries, categoryPeriodMode]);
 
   // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
   // 現金・PayPay等はpaymentMethodIdをそのまま使う）
@@ -3823,7 +3828,10 @@ export default function App() {
                 })()}
               </h3>
               <button
-                onClick={() => setIsCategoryDrilldownOpen(false)}
+                onClick={() => {
+                  setIsCategoryDrilldownOpen(false);
+                  setIsCategoryPickerOpen(false);
+                }}
                 className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
               >
                 <X className="w-5 h-5" />
@@ -3874,47 +3882,58 @@ export default function App() {
               )}
             </div>
 
-            {/* カテゴリ切り替え（横スクロールのチップ。別カテゴリへそのまま切り替えられる。
-                右端にフェードをかけ、まだ続きがある＝スクロールできることを示す） */}
-            <div className="relative -mx-6">
-              <div className="flex gap-2 overflow-x-auto px-6 pb-1">
-                {CATEGORIES.map((c) => {
-                  const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
-                  const IconComponent = c.icon;
+            {/* カテゴリ選択（プルダウン。選択中のアイコン＋名前をトリガーに表示） */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsCategoryPickerOpen((open) => !open)}
+                className="w-full flex items-center justify-between gap-2 bg-slate-900/70 border border-slate-700/60 rounded-xl px-3.5 py-2.5 text-sm font-medium text-slate-200"
+              >
+                {(() => {
+                  const cat = CATEGORIES.find((c) => c.id === analysisCategoryId) || CATEGORIES[0];
+                  const IconComponent = cat.icon;
                   return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setAnalysisCategoryId(c.id)}
-                      className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors border ${
-                        selected
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-md'
-                          : 'bg-slate-700/60 border-white/10 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                      }`}
-                    >
-                      <IconComponent className="w-4 h-4 shrink-0" />
-                      {c.name}
-                    </button>
+                    <span className="flex items-center gap-2">
+                      <IconComponent className="w-4 h-4 text-indigo-400 shrink-0" />
+                      {cat.name}
+                    </span>
                   );
-                })}
-              </div>
-              <div className="pointer-events-none absolute right-0 top-0 bottom-1 w-8 bg-gradient-to-l from-slate-800 to-transparent" />
+                })()}
+                <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isCategoryPickerOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isCategoryPickerOpen && (
+                <div className="absolute z-10 mt-1.5 w-full max-h-64 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1.5">
+                  {CATEGORIES.map((c) => {
+                    const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
+                    const IconComponent = c.icon;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setAnalysisCategoryId(c.id);
+                          setIsCategoryPickerOpen(false);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3.5 py-2 text-sm font-medium transition-colors ${
+                          selected ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <IconComponent className="w-4 h-4 shrink-0" />
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            {/* サマリー */}
+            {/* サマリー（グラフ自体の見出し数字と重複しないよう、月別は「年合計」、
+                年別は「最新年」をヘッドラインにする） */}
             {categoryPeriodSummary && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    {categoryPeriodMode === 'monthly' ? '今月の金額' : '今年の金額'}
-                  </p>
-                  <div className="mt-2 text-xl font-extrabold text-white">¥{categoryPeriodSummary.current.value.toLocaleString()}</div>
-                  {categoryPeriodSummary.diffPct !== null && (
-                    <p className={`mt-1 text-[11px] font-semibold ${categoryPeriodSummary.diff > 0 ? 'text-rose-400' : categoryPeriodSummary.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                      {categoryPeriodSummary.diff > 0 ? '▲' : categoryPeriodSummary.diff < 0 ? '▼' : '―'}
-                      {' '}{Math.abs(categoryPeriodSummary.diffPct).toFixed(1)}% {categoryPeriodMode === 'monthly' ? '前月比' : '前年比'}
-                    </p>
-                  )}
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{categoryPeriodSummary.headlineLabel}</p>
+                  <div className="mt-2 text-xl font-extrabold text-white">¥{categoryPeriodSummary.headline.toLocaleString()}</div>
                 </div>
                 <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4">
                   <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -3922,19 +3941,21 @@ export default function App() {
                   </p>
                   <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(categoryPeriodSummary.average).toLocaleString()}</div>
                 </div>
-                <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 col-span-2">
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
-                  </p>
-                  {categoryPeriodSummary.max ? (
-                    <div className="mt-2 flex items-baseline gap-2">
-                      <span className="text-lg font-bold text-white">{categoryPeriodSummary.max.fullLabel}</span>
-                      <span className="text-indigo-400 font-semibold">¥{categoryPeriodSummary.max.value.toLocaleString()}</span>
-                    </div>
-                  ) : (
-                    <p className="mt-2 text-slate-500 text-sm">データがありません</p>
-                  )}
-                </div>
+                {categoryPeriodSummary.showMax && (
+                  <div className="bg-slate-900/70 border border-slate-700/60 rounded-2xl p-4 col-span-2">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
+                    </p>
+                    {categoryPeriodSummary.max ? (
+                      <div className="mt-2 flex items-baseline gap-2">
+                        <span className="text-lg font-bold text-white">{categoryPeriodSummary.max.fullLabel}</span>
+                        <span className="text-indigo-400 font-semibold">¥{categoryPeriodSummary.max.value.toLocaleString()}</span>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-slate-500 text-sm">データがありません</p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
