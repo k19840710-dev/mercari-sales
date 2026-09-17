@@ -660,7 +660,7 @@ function parseTransactionsFromRows(rawLines) {
 // ハンドラだけを差し替え、見た目（幅・余白・背景・矢印位置）は常に同じにする。
 function PeriodNavigator({ label, onPrev, onNext, prevTitle, nextTitle }) {
   return (
-    <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-3">
+    <div className="bg-slate-800/50 border-b border-slate-800/80 px-4 py-2.5">
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         <button
           onClick={onPrev}
@@ -1146,6 +1146,8 @@ export default function App() {
   // カテゴリの推移で「どれを見るか」（ダッシュボードの月別推移とは別に持つ。
   // 同じ選択肢を共有すると、片方の画面を触ると他方の表示も変わってしまうため）
   const [analysisCategoryId, setAnalysisCategoryId] = useState('');
+  // カテゴリ分析: 月単位（選択中のanalysisYearの1〜12月）で見るか、年単位（全期間の年ごと）で見るか
+  const [categoryPeriodMode, setCategoryPeriodMode] = useState('monthly'); // 'monthly' | 'yearly'
 
   // 月間分析: 1日平均（その月の日数で割る。カレンダーの日数ベースで、記録が
   // あった日数ではない）
@@ -1225,11 +1227,64 @@ export default function App() {
       .sort((a, b) => b.amount - a.amount);
   }, [yearlyTransactions, paymentMethods, yearlyTotal]);
 
-  // カテゴリ分析: 選んだカテゴリ1つの、データがある範囲の月別推移
-  const categoryTrendSeries = useMemo(() => {
+  // カテゴリ分析（月別）: 選んだカテゴリ1つの、選択中の年（analysisYear）1〜12月の推移。
+  // データが無い月も0円として必ず12点そろえる（買った月しか出ない年間推移とは違う軸）。
+  const categoryMonthlySeries = useMemo(() => {
     const catId = analysisCategoryId || CATEGORIES[0]?.id || '';
-    return buildMonthlySeries(transactions.filter((t) => t.category === catId));
+    const sums = new Map();
+    transactions.forEach((t) => {
+      if (t.category !== catId || !t.date.startsWith(String(analysisYear))) return;
+      const m = Number(t.date.slice(5, 7));
+      sums.set(m, (sums.get(m) || 0) + Number(t.amount));
+    });
+    return Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1;
+      return {
+        key: `${analysisYear}-${String(m).padStart(2, '0')}`,
+        xLabel: `${m}月`,
+        fullLabel: `${analysisYear}年${m}月`,
+        value: sums.get(m) || 0,
+      };
+    });
+  }, [transactions, analysisCategoryId, analysisYear]);
+
+  // カテゴリ分析（年別）: 選んだカテゴリ1つの、データがある最初の年〜最後の年の推移
+  const categoryYearlySeries = useMemo(() => {
+    const catId = analysisCategoryId || CATEGORIES[0]?.id || '';
+    const sums = new Map();
+    let minYear = null;
+    let maxYear = null;
+    transactions.forEach((t) => {
+      if (t.category !== catId) return;
+      const y = Number(t.date.slice(0, 4));
+      sums.set(y, (sums.get(y) || 0) + Number(t.amount));
+      if (minYear === null || y < minYear) minYear = y;
+      if (maxYear === null || y > maxYear) maxYear = y;
+    });
+    if (minYear === null) return [];
+    const out = [];
+    for (let y = minYear; y <= maxYear; y += 1) {
+      out.push({ key: String(y), xLabel: `${y}`, fullLabel: `${y}年`, value: sums.get(y) || 0 });
+    }
+    return out;
   }, [transactions, analysisCategoryId]);
+
+  // カテゴリ分析: 表示中の期間モード（月別/年別）に応じたseriesと、その要約統計
+  // （直近ポイントの金額・前期間比・平均・最大の期間）。平均は年間分析の「月平均」と
+  // 同じ考え方で、データが無い期間も含めた固定件数（12ヶ月 or 年数）で割る。
+  const categoryPeriodSeries = categoryPeriodMode === 'yearly' ? categoryYearlySeries : categoryMonthlySeries;
+  const categoryPeriodSummary = useMemo(() => {
+    if (!categoryPeriodSeries.length) return null;
+    const lastIdx = categoryPeriodSeries.length - 1;
+    const current = categoryPeriodSeries[lastIdx];
+    const previous = lastIdx > 0 ? categoryPeriodSeries[lastIdx - 1] : null;
+    const total = categoryPeriodSeries.reduce((sum, p) => sum + p.value, 0);
+    const average = total / categoryPeriodSeries.length;
+    const max = categoryPeriodSeries.reduce((m, p) => (p.value > m.value ? p : m), categoryPeriodSeries[0]);
+    const diff = previous ? current.value - previous.value : null;
+    const diffPct = previous && previous.value > 0 ? (diff / previous.value) * 100 : null;
+    return { current, average, max: max.value > 0 ? max : null, diff, diffPct };
+  }, [categoryPeriodSeries]);
 
   // 支払い方法別の当月集計（クレジットカードはカードIDの有無で判定し、
   // 現金・PayPay等はpaymentMethodIdをそのまま使う）
@@ -2004,7 +2059,7 @@ export default function App() {
       ) : null}
 
       {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 space-y-6 pb-24 sm:pb-6">
+      <main className={`flex-1 max-w-6xl w-full mx-auto px-4 pb-24 sm:pb-6 ${activeTab === 'analysis' ? 'pt-4 space-y-5' : 'py-6 space-y-6'}`}>
 
         {/* ナビゲーションタブ（sm以上でのみ表示。モバイルは下部固定タブバーに切り替え） */}
         <div className="hidden sm:flex gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50">
@@ -2606,7 +2661,7 @@ export default function App() {
 
         {/* --- タブ 4: 分析（月間・年間） --- */}
         {activeTab === 'analysis' && (
-          <div className="space-y-6 animate-fadeIn">
+          <div className="space-y-4 animate-fadeIn">
 
             {/* 月間/年間/カテゴリ 切り替え（支払い方法別は月間・年間の中に統合済み） */}
             <div className="grid grid-cols-3 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 max-w-md gap-1">
@@ -2817,29 +2872,114 @@ export default function App() {
               </>
             ) : (
               <>
-                <div className="flex items-center justify-between gap-3 max-w-md">
-                  <h2 className="text-lg font-bold text-white shrink-0">カテゴリ別の推移</h2>
-                  <select
-                    value={analysisCategoryId || CATEGORIES[0]?.id || ''}
-                    onChange={(e) => setAnalysisCategoryId(e.target.value)}
-                    className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  >
-                    {CATEGORIES.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* 期間切り替え：月別／年別 */}
+                  <div className="grid grid-cols-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50 w-full max-w-[200px] gap-1">
+                    {[
+                      { id: 'monthly', label: '月別' },
+                      { id: 'yearly', label: '年別' },
+                    ].map(({ id, label }) => (
+                      <button
+                        key={id}
+                        onClick={() => setCategoryPeriodMode(id)}
+                        className={`py-2 px-3 rounded-xl text-sm font-medium text-center transition-all ${
+                          categoryPeriodMode === id ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {label}
+                      </button>
                     ))}
-                  </select>
+                  </div>
+
+                  {/* 年選択（月別のときだけ。年別は全期間をまとめて見るため不要） */}
+                  {categoryPeriodMode === 'monthly' && (
+                    <div className="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 rounded-2xl px-1.5 py-1.5">
+                      <button
+                        onClick={() => setAnalysisYear((y) => y - 1)}
+                        className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                        title="前年"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-sm font-bold text-white px-2">{analysisYear}年</span>
+                      <button
+                        onClick={() => setAnalysisYear((y) => y + 1)}
+                        className="shrink-0 p-1.5 rounded-lg hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                        title="翌年"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* カテゴリ切り替え（横スクロールのチップ。プルダウンは廃止） */}
+                <div className="flex gap-2 overflow-x-auto -mx-4 px-4 pb-1 sm:mx-0 sm:px-0">
+                  {CATEGORIES.map((c) => {
+                    const selected = (analysisCategoryId || CATEGORIES[0]?.id) === c.id;
+                    const IconComponent = c.icon;
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => setAnalysisCategoryId(c.id)}
+                        className={`shrink-0 flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-colors ${
+                          selected ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <IconComponent className="w-4 h-4 shrink-0" />
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* サマリー */}
+                {categoryPeriodSummary && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        {categoryPeriodMode === 'monthly' ? '今月の金額' : '今年の金額'}
+                      </p>
+                      <div className="mt-2 text-xl font-extrabold text-white">¥{categoryPeriodSummary.current.value.toLocaleString()}</div>
+                      {categoryPeriodSummary.diffPct !== null && (
+                        <p className={`mt-1 text-[11px] font-semibold ${categoryPeriodSummary.diff > 0 ? 'text-rose-400' : categoryPeriodSummary.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                          {categoryPeriodSummary.diff > 0 ? '▲' : categoryPeriodSummary.diff < 0 ? '▼' : '―'}
+                          {' '}{Math.abs(categoryPeriodSummary.diffPct).toFixed(1)}% {categoryPeriodMode === 'monthly' ? '前月比' : '前年比'}
+                        </p>
+                      )}
+                    </div>
+                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        {categoryPeriodMode === 'monthly' ? '月平均' : '年平均'}
+                      </p>
+                      <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(categoryPeriodSummary.average).toLocaleString()}</div>
+                    </div>
+                    <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl col-span-2">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        {categoryPeriodMode === 'monthly' ? '最も支出が多かった月' : '最も支出が多かった年'}
+                      </p>
+                      {categoryPeriodSummary.max ? (
+                        <div className="mt-2 flex items-baseline gap-2">
+                          <span className="text-lg font-bold text-white">{categoryPeriodSummary.max.fullLabel}</span>
+                          <span className="text-indigo-400 font-semibold">¥{categoryPeriodSummary.max.value.toLocaleString()}</span>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-slate-500 text-sm">データがありません</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+                  <TrendChart series={categoryPeriodSeries} />
                 </div>
 
                 <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  <TrendChart series={categoryTrendSeries} />
-                </div>
-
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  {categoryTrendSeries.length === 0 ? (
+                  {categoryPeriodSeries.filter((p) => p.value > 0).length === 0 ? (
                     <p className="text-sm text-slate-400 text-center py-6">データがありません。</p>
                   ) : (
                     <div className="divide-y divide-slate-700/50">
-                      {categoryTrendSeries.map((m) => (
+                      {categoryPeriodSeries.map((m) => (
                         <div key={m.key} className="py-2 flex items-center justify-between gap-3">
                           <span className="text-sm text-slate-300">{m.fullLabel}</span>
                           <span className="text-sm font-bold text-white">¥{m.value.toLocaleString()}</span>
