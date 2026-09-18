@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import TrendChart from './components/TrendChart.jsx';
 import DonutChart from './components/DonutChart.jsx';
+import YearlyBarChart from './components/YearlyBarChart.jsx';
 import {
   auth,
   db,
@@ -1184,6 +1185,25 @@ export default function App() {
       return { key, xLabel: `${m}月`, fullLabel: `${analysisYear}年${m}月`, value };
     });
   }, [yearlyTransactions, analysisYear]);
+
+  // 年間分析のメイングラフ用：全カテゴリ合計の年別比較（データがある最初の年〜最後の年）
+  const yearlyComparisonSeries = useMemo(() => {
+    const sums = new Map();
+    let minYear = null;
+    let maxYear = null;
+    transactions.forEach((t) => {
+      const y = Number(t.date.slice(0, 4));
+      sums.set(y, (sums.get(y) || 0) + Number(t.amount));
+      if (minYear === null || y < minYear) minYear = y;
+      if (maxYear === null || y > maxYear) maxYear = y;
+    });
+    if (minYear === null) return [];
+    const out = [];
+    for (let y = minYear; y <= maxYear; y += 1) {
+      out.push({ key: String(y), xLabel: `${y}`, fullLabel: `${y}年`, value: sums.get(y) || 0 });
+    }
+    return out;
+  }, [transactions]);
 
   const topSpendingMonth = useMemo(() => {
     if (!yearlyMonthlySeries.some((m) => m.value > 0)) return null;
@@ -2709,7 +2729,16 @@ export default function App() {
                   {totalMonthlyAmount === 0 ? (
                     <p className="text-sm text-slate-400 text-center py-6">この月の支出はありません。</p>
                   ) : (
-                    <div className="space-y-1.5">
+                    <>
+                      <div className="mb-3 pb-3 border-b border-slate-700/50">
+                        <DonutChart
+                          slices={categoryStats.map((cat) => ({ id: cat.id, label: cat.name, value: cat.amount, colorName: categoryColorName(cat) }))}
+                          centerLabel="今月の支出"
+                          centerValue={`¥${totalMonthlyAmount.toLocaleString()}`}
+                          showLegend={false}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
                       {categoryStats.filter((c) => c.amount > 0).map((cat) => {
                         const IconComponent = cat.icon;
                         return (
@@ -2740,7 +2769,8 @@ export default function App() {
                           </button>
                         );
                       })}
-                    </div>
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -2793,9 +2823,9 @@ export default function App() {
                 <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
                   <h3 className="text-base font-bold text-white mb-1 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-indigo-400" />
-                    月別推移
+                    年別比較
                   </h3>
-                  <TrendChart series={yearlyMonthlySeries} />
+                  <YearlyBarChart series={yearlyComparisonSeries} highlightKey={String(analysisYear)} />
                 </div>
 
                 <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">

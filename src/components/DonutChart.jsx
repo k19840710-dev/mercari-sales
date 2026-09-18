@@ -26,7 +26,7 @@ export function colorNameToHex(name) {
  * props.slices: [{ id, label, value, colorName }]
  * props.centerLabel / props.centerValue: 中央に表示するラベルと値
  */
-export default function DonutChart({ slices, centerLabel, centerValue }) {
+export default function DonutChart({ slices, centerLabel, centerValue, showLegend = true }) {
   const total = slices.reduce((sum, s) => sum + s.value, 0);
   const size = 160;
   const strokeWidth = 22;
@@ -44,7 +44,7 @@ export default function DonutChart({ slices, centerLabel, centerValue }) {
   }) : [];
 
   return (
-    <div className="flex flex-col sm:flex-row items-center gap-6">
+    <div className={`flex ${showLegend ? 'flex-col sm:flex-row items-center gap-6' : 'justify-center'}`}>
       <div className="relative shrink-0" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
           <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#334155" strokeWidth={strokeWidth} />
@@ -68,26 +68,28 @@ export default function DonutChart({ slices, centerLabel, centerValue }) {
         </div>
       </div>
 
-      <div className="flex-1 w-full space-y-1.5 min-w-0">
-        {visibleSlices.length === 0 ? (
-          <p className="text-sm text-slate-400 text-center py-2">データがありません</p>
-        ) : (
-          visibleSlices.map((s) => (
-            <div key={s.id} className="flex items-center justify-between text-sm gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorNameToHex(s.colorName) }} />
-                <span className="text-slate-300 truncate">{s.label}</span>
+      {showLegend && (
+        <div className="flex-1 w-full space-y-1.5 min-w-0">
+          {visibleSlices.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-2">データがありません</p>
+          ) : (
+            visibleSlices.map((s) => (
+              <div key={s.id} className="flex items-center justify-between text-sm gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: colorNameToHex(s.colorName) }} />
+                  <span className="text-slate-300 truncate">{s.label}</span>
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-bold text-white">¥{s.value.toLocaleString()}</span>
+                  <span className="text-xs text-slate-400 ml-1.5">
+                    ({total > 0 ? Math.round((s.value / total) * 100) : 0}%)
+                  </span>
+                </div>
               </div>
-              <div className="text-right shrink-0">
-                <span className="font-bold text-white">¥{s.value.toLocaleString()}</span>
-                <span className="text-xs text-slate-400 ml-1.5">
-                  ({total > 0 ? Math.round((s.value / total) * 100) : 0}%)
-                </span>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
