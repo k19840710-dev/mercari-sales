@@ -928,6 +928,8 @@ export default function App() {
   const [filterAmountMin, setFilterAmountMin] = useState('');
   const [filterAmountMax, setFilterAmountMax] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  // 絞り込み欄（カード/カテゴリ/期間/金額）はアコーディオンにまとめ、既定では畳んでおく
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   // 月別推移グラフのステート
   const [trendMode, setTrendMode] = useState('total'); // 'total' | 'paymentMethod' | 'category'
@@ -1453,6 +1455,10 @@ export default function App() {
     monthlyTransactions, transactions, filterCardId, filterCategory, filterPaymentMethodId,
     filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, searchQuery,
   ]);
+
+  // フィルターアイコンのハイライト・リセットボタン表示の判定に使う
+  const hasActiveTransactionFilter = filterPaymentMethodId !== 'all' || filterCardId !== 'all' || filterCategory !== 'all'
+    || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || searchQuery;
 
   // --- アクションハンドラー ---
   const resetNewTxForm = () => {
@@ -2079,7 +2085,7 @@ export default function App() {
       )}
 
       {/* 3. メインコンテンツ領域（モバイルは下部固定タブバーの分だけ下に余白を確保） */}
-      <main className={`flex-1 max-w-6xl w-full mx-auto px-4 pb-24 sm:pb-6 ${activeTab === 'analysis' ? 'pt-4 space-y-5' : 'py-6 space-y-6'}`}>
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 pt-4 pb-24 sm:pb-6 space-y-5">
 
         {/* ナビゲーションタブ（sm以上でのみ表示。モバイルは下部固定タブバーに切り替え） */}
         <div className="hidden sm:flex gap-0 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/50">
@@ -2179,7 +2185,68 @@ export default function App() {
               )}
             </div>
 
-            {/* ③ カテゴリ別支出（リスト/円グラフ切替） */}
+            {/* ③ 月別支出推移（全体/支払い方法別/カテゴリ別） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-indigo-400" />
+                  月別支出推移
+                </h2>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
+                    <button
+                      onClick={() => setTrendMode('total')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'total' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      全体
+                    </button>
+                    <button
+                      onClick={() => setTrendMode('paymentMethod')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'paymentMethod' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      支払い方法別
+                    </button>
+                    <button
+                      onClick={() => setTrendMode('category')}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        trendMode === 'category' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      カテゴリ別
+                    </button>
+                  </div>
+                  {trendMode === 'paymentMethod' && (
+                    <select
+                      value={trendPaymentMethodId || paymentMethods[0]?.id || ''}
+                      onChange={(e) => setTrendPaymentMethodId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      {paymentMethods.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  {trendMode === 'category' && (
+                    <select
+                      value={trendCategoryId || CATEGORIES[0]?.id || ''}
+                      onChange={(e) => setTrendCategoryId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+              <TrendChart series={trendSeries} />
+            </div>
+
+            {/* ④ カテゴリ別支出（リスト/円グラフ切替） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -2245,7 +2312,7 @@ export default function App() {
               )}
             </div>
 
-            {/* ④ 支払い方法別 */}
+            {/* ⑤ 支払い方法別 */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
               <h2 className="text-base font-bold text-white mb-3 flex items-center gap-2">
                 <Wallet className="w-4 h-4 text-indigo-400" />
@@ -2274,67 +2341,6 @@ export default function App() {
                   ))}
                 </div>
               )}
-            </div>
-
-            {/* ⑤ 月別支出推移（全体/支払い方法別/カテゴリ別） */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-indigo-400" />
-                  月別支出推移
-                </h2>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
-                    <button
-                      onClick={() => setTrendMode('total')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        trendMode === 'total' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      全体
-                    </button>
-                    <button
-                      onClick={() => setTrendMode('paymentMethod')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        trendMode === 'paymentMethod' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      支払い方法別
-                    </button>
-                    <button
-                      onClick={() => setTrendMode('category')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                        trendMode === 'category' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      カテゴリ別
-                    </button>
-                  </div>
-                  {trendMode === 'paymentMethod' && (
-                    <select
-                      value={trendPaymentMethodId || paymentMethods[0]?.id || ''}
-                      onChange={(e) => setTrendPaymentMethodId(e.target.value)}
-                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      {paymentMethods.map((m) => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  )}
-                  {trendMode === 'category' && (
-                    <select
-                      value={trendCategoryId || CATEGORIES[0]?.id || ''}
-                      onChange={(e) => setTrendCategoryId(e.target.value)}
-                      className="bg-slate-900 border border-slate-700 rounded-lg text-xs px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      {CATEGORIES.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              </div>
-              <TrendChart series={trendSeries} />
             </div>
 
             {/* ⑥ カード利用状況（簡易表示。詳細はカードタブへ） */}
@@ -2373,144 +2379,134 @@ export default function App() {
         {activeTab === 'transactions' && (
           <div className="space-y-4 animate-fadeIn">
 
-            {/* 検索・フィルターバー */}
+            {/* 検索・フィルターバー（フィルター項目はアコーディオンに畳んでおく） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 space-y-3">
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="店舗名・メモで検索"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl text-sm pl-9 pr-3 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="店舗名・メモで検索"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl text-sm pl-9 pr-3 py-2.5 text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsFilterOpen((open) => !open)}
+                  className={`shrink-0 p-2.5 rounded-xl border transition-colors ${
+                    isFilterOpen || hasActiveTransactionFilter
+                      ? 'bg-indigo-600 border-indigo-600 text-white'
+                      : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-700/60'
+                  }`}
+                  title="絞り込み"
+                >
+                  <Filter className="w-4 h-4" />
+                </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex items-center gap-1.5 text-xs text-slate-400 mr-1">
-                  <Filter className="w-3.5 h-3.5 text-indigo-400" />
-                  絞り込み:
+              {isFilterOpen && (
+                <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <select
+                      value={filterPaymentMethodId}
+                      onChange={(e) => setFilterPaymentMethodId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-xl text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="all">すべての支払い方法</option>
+                      {paymentMethods.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={filterCardId}
+                      onChange={(e) => setFilterCardId(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-xl text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="all">すべてのカード</option>
+                      {cards.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={filterCategory}
+                      onChange={(e) => setFilterCategory(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-xl text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="all">すべてのカテゴリ</option>
+                      {CATEGORIES.map((cat) => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <p className="text-[11px] text-slate-400 mb-1.5">期間（両方空欄なら表示中の月のみ）</p>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="date"
+                        value={filterDateFrom}
+                        onChange={(e) => setFilterDateFrom(e.target.value)}
+                        className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-xl text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-slate-500 text-xs shrink-0">〜</span>
+                      <input
+                        type="date"
+                        value={filterDateTo}
+                        onChange={(e) => setFilterDateTo(e.target.value)}
+                        className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-xl text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-[11px] text-slate-400 mb-1.5">金額範囲</p>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        value={filterAmountMin}
+                        onChange={(e) => setFilterAmountMin(e.target.value)}
+                        placeholder="最小金額"
+                        className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-xl text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-slate-500 text-xs shrink-0">〜</span>
+                      <input
+                        type="number"
+                        value={filterAmountMax}
+                        onChange={(e) => setFilterAmountMax(e.target.value)}
+                        placeholder="最大金額"
+                        className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-xl text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  {hasActiveTransactionFilter && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterPaymentMethodId('all');
+                        setFilterCardId('all');
+                        setFilterCategory('all');
+                        setFilterDateFrom('');
+                        setFilterDateTo('');
+                        setFilterAmountMin('');
+                        setFilterAmountMax('');
+                        setSearchQuery('');
+                      }}
+                      className="text-xs text-slate-400 hover:text-white underline underline-offset-2"
+                    >
+                      絞り込みをリセット
+                    </button>
+                  )}
                 </div>
-
-                <select
-                  value={filterPaymentMethodId}
-                  onChange={(e) => setFilterPaymentMethodId(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="all">すべての支払い方法</option>
-                  {paymentMethods.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-
-                <select
-                  value={filterCardId}
-                  onChange={(e) => setFilterCardId(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="all">すべてのカード</option>
-                  {cards.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-
-                <select
-                  value={filterCategory}
-                  onChange={(e) => setFilterCategory(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="all">すべてのカテゴリ</option>
-                  {CATEGORIES.map((cat) => (
-                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                  ))}
-                </select>
-
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="date"
-                    value={filterDateFrom}
-                    onChange={(e) => setFilterDateFrom(e.target.value)}
-                    className="min-w-0 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                    title="期間（開始日）。指定すると表示中の月に関わらず全期間から検索します"
-                  />
-                  <span className="text-slate-500 text-xs">〜</span>
-                  <input
-                    type="date"
-                    value={filterDateTo}
-                    onChange={(e) => setFilterDateTo(e.target.value)}
-                    className="min-w-0 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                    title="期間（終了日）"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="number"
-                    value={filterAmountMin}
-                    onChange={(e) => setFilterAmountMin(e.target.value)}
-                    placeholder="金額 下限"
-                    className="w-24 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  />
-                  <span className="text-slate-500 text-xs">〜</span>
-                  <input
-                    type="number"
-                    value={filterAmountMax}
-                    onChange={(e) => setFilterAmountMax(e.target.value)}
-                    placeholder="上限"
-                    className="w-24 bg-slate-900 border border-slate-700 rounded-xl text-xs sm:text-sm px-2.5 py-2 text-slate-200 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                {(filterPaymentMethodId !== 'all' || filterCardId !== 'all' || filterCategory !== 'all' || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || searchQuery) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFilterPaymentMethodId('all');
-                      setFilterCardId('all');
-                      setFilterCategory('all');
-                      setFilterDateFrom('');
-                      setFilterDateTo('');
-                      setFilterAmountMin('');
-                      setFilterAmountMax('');
-                      setSearchQuery('');
-                    }}
-                    className="text-xs text-slate-400 hover:text-white underline underline-offset-2"
-                  >
-                    リセット
-                  </button>
-                )}
-              </div>
+              )}
 
               {(filterDateFrom || filterDateTo) && (
                 <p className="text-[11px] text-amber-300">期間を指定しているため、表示中の月に関わらず全期間から検索しています。</p>
               )}
-            </div>
-
-            {/* 書き出し・読み込み */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-slate-400">
-                {inCapabilityHost
-                  ? 'データのバックアップ、またはバックアップ用JSONファイルの読み込み'
-                  : 'データのバックアップ、または明細のスクリーンショットを直接読み込めます'}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleExport}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium hover:bg-slate-700/60 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  書き出し
-                </button>
-                <button
-                  type="button"
-                  onClick={handleImportClick}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium hover:bg-slate-700/60 transition-colors"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  読み込み
-                </button>
-              </div>
             </div>
 
             {/* 明細リスト */}
@@ -2576,6 +2572,33 @@ export default function App() {
                   })}
                 </div>
               )}
+            </div>
+
+            {/* 書き出し・読み込み（一覧の邪魔にならないよう最下部に配置） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-slate-400">
+                {inCapabilityHost
+                  ? 'データのバックアップ、またはバックアップ用JSONファイルの読み込み'
+                  : 'データのバックアップ、または明細のスクリーンショットを直接読み込めます'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium hover:bg-slate-700/60 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  書き出し
+                </button>
+                <button
+                  type="button"
+                  onClick={handleImportClick}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs sm:text-sm font-medium hover:bg-slate-700/60 transition-colors"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  読み込み
+                </button>
+              </div>
             </div>
 
           </div>
