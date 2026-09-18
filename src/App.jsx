@@ -1163,15 +1163,6 @@ export default function App() {
     return daysInMonth > 0 ? totalMonthlyAmount / daysInMonth : 0;
   }, [currentMonth, totalMonthlyAmount]);
 
-  // 月間分析: 最も支出が多かった日（カレンダータブのdailyTotalsを流用）
-  const maxSpendingDay = useMemo(() => {
-    let best = null;
-    dailyTotals.forEach((v, date) => {
-      if (!best || v.total > best.total) best = { date, total: v.total };
-    });
-    return best;
-  }, [dailyTotals]);
-
   // 年間分析: 選択中の年の全明細
   const yearlyTransactions = useMemo(() => {
     return transactions.filter((t) => t.date.startsWith(String(analysisYear)));
@@ -2693,9 +2684,7 @@ export default function App() {
 
             {analysisMode === 'monthly' ? (
               <>
-                <h2 className="text-lg font-bold text-white">{formattedMonth}の分析</h2>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">総支出</p>
                     <div className="mt-2 text-xl font-extrabold text-white">¥{totalMonthlyAmount.toLocaleString()}</div>
@@ -2707,35 +2696,20 @@ export default function App() {
                     )}
                   </div>
                   <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支出件数</p>
-                    <div className="mt-2 text-xl font-extrabold text-white">{monthlyTransactions.length}<span className="text-sm text-slate-400 ml-1">件</span></div>
-                  </div>
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">1日平均</p>
                     <div className="mt-2 text-xl font-extrabold text-white">¥{Math.round(dailyAverageThisMonth).toLocaleString()}</div>
                   </div>
-                  <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">最大支出日</p>
-                    {maxSpendingDay ? (
-                      <>
-                        <div className="mt-2 text-xl font-extrabold text-white">{Number(maxSpendingDay.date.slice(8, 10))}日</div>
-                        <p className="mt-1 text-[11px] text-slate-400">¥{maxSpendingDay.total.toLocaleString()}</p>
-                      </>
-                    ) : (
-                      <p className="mt-2 text-slate-500 text-sm">データなし</p>
-                    )}
-                  </div>
                 </div>
 
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
                     <Tag className="w-4 h-4 text-indigo-400" />
                     カテゴリ別
                   </h3>
                   {totalMonthlyAmount === 0 ? (
                     <p className="text-sm text-slate-400 text-center py-6">この月の支出はありません。</p>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-1.5">
                       {categoryStats.filter((c) => c.amount > 0).map((cat) => {
                         const IconComponent = cat.icon;
                         return (
@@ -2743,7 +2717,7 @@ export default function App() {
                             key={cat.id}
                             type="button"
                             onClick={() => openCategoryDrilldown(cat.id)}
-                            className="w-full text-left space-y-1 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
+                            className="w-full text-left space-y-0.5 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
                           >
                             <div className="flex items-center justify-between text-sm">
                               <div className="flex items-center space-x-2">
@@ -2757,7 +2731,7 @@ export default function App() {
                                 <span className="text-xs text-slate-400 ml-2">({cat.percentage}%)</span>
                               </div>
                             </div>
-                            <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
+                            <div className="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
                               <div
                                 className={`h-full rounded-full transition-all duration-500 ${cat.color.split(' ')[0]}`}
                                 style={{ width: `${cat.percentage}%` }}
@@ -2824,15 +2798,15 @@ export default function App() {
                   <TrendChart series={yearlyMonthlySeries} />
                 </div>
 
-                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-                  <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+                <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+                  <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2">
                     <Tag className="w-4 h-4 text-indigo-400" />
                     カテゴリ別
                   </h3>
                   {yearlyTotal === 0 ? (
                     <p className="text-sm text-slate-400 text-center py-6">この年の支出はありません。</p>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-1.5">
                       {yearlyCategoryStats.filter((c) => c.amount > 0).map((cat) => {
                         const IconComponent = cat.icon;
                         return (
@@ -2840,7 +2814,7 @@ export default function App() {
                             key={cat.id}
                             type="button"
                             onClick={() => openCategoryDrilldown(cat.id)}
-                            className="w-full text-left space-y-1 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
+                            className="w-full text-left space-y-0.5 -mx-2 px-2 py-1 rounded-lg hover:bg-slate-700/40 transition-colors"
                           >
                             <div className="flex items-center justify-between text-sm">
                               <div className="flex items-center space-x-2">
@@ -2854,7 +2828,7 @@ export default function App() {
                                 <span className="text-xs text-slate-400 ml-2">({cat.percentage}%)</span>
                               </div>
                             </div>
-                            <div className="w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
+                            <div className="w-full bg-slate-700/50 rounded-full h-1.5 overflow-hidden">
                               <div
                                 className={`h-full rounded-full transition-all duration-500 ${cat.color.split(' ')[0]}`}
                                 style={{ width: `${cat.percentage}%` }}
