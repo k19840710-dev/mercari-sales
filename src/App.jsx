@@ -2192,11 +2192,11 @@ export default function App() {
                   <TrendingUp className="w-4 h-4 text-indigo-400" />
                   月別支出推移
                 </h2>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
+                <div className="flex items-center gap-2 flex-wrap w-full">
+                  <div className="flex w-full bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
                     <button
                       onClick={() => setTrendMode('total')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      className={`flex-1 text-center px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
                         trendMode === 'total' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -2204,7 +2204,7 @@ export default function App() {
                     </button>
                     <button
                       onClick={() => setTrendMode('paymentMethod')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      className={`flex-1 text-center px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
                         trendMode === 'paymentMethod' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -2212,7 +2212,7 @@ export default function App() {
                     </button>
                     <button
                       onClick={() => setTrendMode('category')}
-                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                      className={`flex-1 text-center px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
                         trendMode === 'category' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -2256,7 +2256,7 @@ export default function App() {
                 <div className="flex bg-slate-900/70 p-1 rounded-lg border border-slate-700/60">
                   <button
                     onClick={() => setCategoryViewMode('list')}
-                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    className={`w-20 text-center whitespace-nowrap py-1.5 px-3 rounded-md text-xs font-medium transition-colors ${
                       categoryViewMode === 'list' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
@@ -2264,7 +2264,7 @@ export default function App() {
                   </button>
                   <button
                     onClick={() => setCategoryViewMode('donut')}
-                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    className={`w-20 text-center whitespace-nowrap py-1.5 px-3 rounded-md text-xs font-medium transition-colors ${
                       categoryViewMode === 'donut' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
