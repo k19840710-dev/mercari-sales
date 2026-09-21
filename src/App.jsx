@@ -1523,7 +1523,7 @@ export default function App() {
     setNewCard({
       name: card.name || '',
       brand: card.brand || 'VISA',
-      number: card.number || '',
+      number: (card.number || '').replace(/\D/g, ''),
       holderName: card.holderName || '',
       expiry: card.expiry || '',
       cvv: card.cvv || '',
@@ -1536,6 +1536,40 @@ export default function App() {
     });
     setEditingCardId(card.id);
     setIsAddCardOpen(true);
+  };
+
+  // カード番号入力：常に数字だけをstateに保持し、表示だけ4桁区切りにする。
+  // オートフォーマットの区切り文字（スペース）をまたぐバックスペースでも、
+  // 見た目上1文字ずつ消えるよう桁数の変化を見て調整する。
+  const handleCardNumberChange = (e) => {
+    const input = e.target.value;
+    const prevFormatted = newCard.number.replace(/(.{4})(?=.)/g, '$1 ');
+    let digits = input.replace(/\D/g, '').slice(0, 16);
+    if (input.length < prevFormatted.length && digits.length === newCard.number.length) {
+      digits = digits.slice(0, -1);
+    }
+    setNewCard({ ...newCard, number: digits });
+  };
+
+  // 有効期限入力：2桁入力された時点で自動で「/」を付け、月は01〜12にクランプする。
+  // バックスペースの扱いはカード番号と同じ考え方（区切り文字をまたいでも1文字ずつ消える）。
+  const handleExpiryChange = (e) => {
+    const input = e.target.value;
+    const prevFormatted = newCard.expiry;
+    let digits = input.replace(/\D/g, '').slice(0, 4);
+    if (digits.length >= 2) {
+      let mm = digits.slice(0, 2);
+      const mmNum = parseInt(mm, 10);
+      if (mmNum === 0) mm = '01';
+      else if (mmNum > 12) mm = '12';
+      digits = mm + digits.slice(2);
+    }
+    const prevDigits = prevFormatted.replace(/\D/g, '');
+    if (input.length < prevFormatted.length && digits.length === prevDigits.length) {
+      digits = digits.slice(0, -1);
+    }
+    const formatted = digits.length >= 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+    setNewCard({ ...newCard, expiry: formatted });
   };
 
   const handleSaveTransaction = async (e) => {
@@ -3423,8 +3457,8 @@ export default function App() {
                   inputMode="numeric"
                   maxLength={19}
                   placeholder="1234 5678 9012 3456"
-                  value={newCard.number}
-                  onChange={(e) => setNewCard({ ...newCard, number: e.target.value })}
+                  value={newCard.number.replace(/(.{4})(?=.)/g, '$1 ')}
+                  onChange={handleCardNumberChange}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm font-mono tracking-wider focus:outline-none focus:border-indigo-500"
                 />
               </div>
@@ -3449,7 +3483,7 @@ export default function App() {
                     maxLength={5}
                     placeholder="MM/YY"
                     value={newCard.expiry}
-                    onChange={(e) => setNewCard({ ...newCard, expiry: e.target.value })}
+                    onChange={handleExpiryChange}
                     className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm font-mono focus:outline-none focus:border-indigo-500"
                   />
                 </div>
