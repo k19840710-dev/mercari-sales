@@ -475,6 +475,13 @@ function maskCardNumber(number, last4) {
   return `•••• •••• •••• ${tail}`;
 }
 
+// マイナス金額（Gmail取込が返金/返品と判定した明細）は「−¥1,234」のように表示する。
+// 通常の支出（0以上）は符号なしでそのまま表示する。
+function formatSignedYen(amount) {
+  const n = Number(amount) || 0;
+  return n < 0 ? `−¥${Math.abs(n).toLocaleString()}` : `¥${n.toLocaleString()}`;
+}
+
 // 日本語カテゴリ名 → カテゴリID の対応表（インポート時に使用）
 const CATEGORY_NAME_TO_ID = CATEGORIES.reduce((map, c) => {
   map[c.name] = c.id;
@@ -2572,8 +2579,11 @@ export default function App() {
                             <IconComponent className="w-5 h-5" />
                           </div>
                           <div className="min-w-0">
-                            <p className="font-semibold text-white text-sm sm:text-base truncate">
-                              {tx.merchant || tx.memo}
+                            <p className="font-semibold text-white text-sm sm:text-base flex items-center gap-1.5 min-w-0">
+                              <span className="truncate">{tx.merchant || tx.memo}</span>
+                              {tx.amount < 0 && (
+                                <span className="shrink-0 px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-bold">返金</span>
+                              )}
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
                               <div>{tx.date}{timeLabel}</div>
@@ -2583,8 +2593,8 @@ export default function App() {
                         </div>
 
                         <div className="flex items-center space-x-3 shrink-0">
-                          <span className="font-bold text-white text-base sm:text-lg">
-                            ¥{Number(tx.amount).toLocaleString()}
+                          <span className={`font-bold text-base sm:text-lg ${tx.amount < 0 ? 'text-emerald-400' : 'text-white'}`}>
+                            {formatSignedYen(tx.amount)}
                           </span>
                           <button
                             onClick={() => handleOpenEditTransaction(tx)}
@@ -2722,7 +2732,7 @@ export default function App() {
                                 <p className="text-xs text-slate-400 truncate">{getPaymentLabel(tx)}</p>
                               </div>
                             </div>
-                            <span className="text-sm font-bold text-white shrink-0">¥{Number(tx.amount).toLocaleString()}</span>
+                            <span className={`text-sm font-bold shrink-0 ${tx.amount < 0 ? 'text-emerald-400' : 'text-white'}`}>{formatSignedYen(tx.amount)}</span>
                           </div>
                         );
                       })}
@@ -3787,7 +3797,7 @@ export default function App() {
                         <p className="text-[11px] text-slate-500 truncate" title={item.from}>差出人: {item.from || '不明'}</p>
                       </div>
                       {item.amount ? (
-                        <span className="flex-none text-sm font-mono font-bold text-white">¥{Number(item.amount).toLocaleString()}</span>
+                        <span className={`flex-none text-sm font-mono font-bold ${item.amount < 0 ? 'text-emerald-400' : 'text-white'}`}>{formatSignedYen(item.amount)}</span>
                       ) : null}
                     </div>
 

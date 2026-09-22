@@ -144,7 +144,7 @@ function checkCardEmails() {
               subject,
               from: message.getFrom() || '',
               receivedAt: messageDate.toISOString(),
-              amount: extracted.data.amount,
+              amount: signedAmount_(extracted.data.amount, extracted.data.isRefund),
               date: extracted.data.date,
               merchant: extracted.data.merchant,
               issuerNameGuess: extracted.data.issuerName,
@@ -162,8 +162,12 @@ function checkCardEmails() {
           // ここに来るのは decision.action === 'register'（自動登録OK）の場合のみ。
           // decision.card は、AIの抽出結果（カード番号下4桁 or カード名の完全一致）が
           // 実際に登録済みのカードと一致した結果であり、新規作成されたものではない。
-          const { issuerName, merchant, amount, date } = extracted.data;
+          const { issuerName, merchant, amount, date, isRefund } = extracted.data;
           const cardId = decision.card.id;
+          // 返品・返金の通知は、家計簿上は支出のマイナス（入金）として扱う。
+          // 見た目のUIや合計計算はamountの符号だけで判定するので、ここで符号を
+          // 決めてしまえば以降のコードは通常の購入と同じロジックで良い。
+          const signedAmount = signedAmount_(amount, isRefund);
 
           // 「コミックシーモア　サクヒン　ポイント」のような余計な文字を削り、知っている
           // 店名なら正式名称＋カテゴリに寄せる（src/App.jsxのOCR取込と同じ表記に揃うので、
@@ -179,8 +183,9 @@ function checkCardEmails() {
           // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう
           // ので、実際に受信時刻がほぼ同時（数分以内）かどうかで見分ける。同じ決済
           // イベントから同時に発生する別チャネル通知は受信がほぼ同時になるが、別々の
-          // 買い物は数分以上ずれることが多いため。
-          const duplicate = findDuplicateTransaction_(accessToken, amount, date);
+          // 買い物は数分以上ずれることが多いため。符号付き金額で照合するので、通常の
+          // 購入とその後の返品（符号が逆）を誤って同一視することもない。
+          const duplicate = findDuplicateTransaction_(accessToken, signedAmount, date);
           const messageTime = messageDate.getTime();
           const existingTime = duplicate && duplicate.gmailReceivedAt ? new Date(duplicate.gmailReceivedAt).getTime() : null;
           // 受信時刻の記録が無い明細（手動入力・アプリ内OCR取込・確認待ちからの
@@ -208,13 +213,13 @@ function checkCardEmails() {
             }
 
             if (patchMerchant === duplicate.merchant && patchCategory === duplicate.category) {
-              console.log(`重複のためスキップ: ${date} ¥${amount} (${issuerName}/${merchant})`);
+              console.log(`重複のためスキップ: ${date} ¥${signedAmount} (${issuerName}/${merchant})`);
             } else {
-              console.log(`重複を補完: ${date} ¥${amount} → 店名「${patchMerchant}」`);
+              console.log(`重複を補完: ${date} ¥${signedAmount} → 店名「${patchMerchant}」`);
               firestoreRequest_(accessToken, 'patch', duplicate.url, {
                 fields: toFirestoreFields_({
                   cardId: duplicate.cardId || cardId,
-                  amount,
+                  amount: signedAmount,
                   date,
                   category: patchCategory,
                   merchant: patchMerchant,
@@ -232,7 +237,7 @@ function checkCardEmails() {
           // 何度処理しても重複した明細ができない（既存ドキュメントを上書きするだけ）。
           createTransaction_(accessToken, `t-gmail-${message.getId()}`, {
             cardId,
-            amount,
+            amount: signedAmount,
             date,
             category: finalCategory,
             merchant: finalName,
@@ -360,14 +365,23 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
     '請求額確定・引き落とし案内（月次まとめ）、カード更新案内、メンテナンス案内、ログイン通知、',
     'その他「今この場でカードを使って買い物をした」ことの通知ではないメール。',
     '',
+    '注意: カード会社によっては「返品」「返金」による入金も、通常の利用通知と全く同じ',
+    '件名・テンプレート（例:「ご利用のお知らせ」）で届きます。店舗名の欄に「（返品）」等の',
+    '記載がある、または金額の前に返金・返品・キャンセル・取消であることを示す記載がある',
+    '場合は、is_purchase_notification は true のまま、is_refund を true にしてください',
+    '（このメール自体をスキップしないこと。amountには符号なしの金額をそのまま入れてください）。',
+    '',
     '利用確定の通知メールだと判断した場合は、以下も抽出してください（わからない項目はnull）:',
     '- confidence: 判定・抽出内容にどれだけ自信があるか（high/medium/lowのいずれか）',
     '- issuer_name: カード会社・決済サービス名（例: 「メルカード」「三井住友カード」「楽天カード」など。件名や本文、署名から判断）',
     '- last4: カード番号の下4桁（半角数字4桁。本文に記載が無ければnull。「＊＊＊＊1234」等の末尾4桁も対象）',
-    '- merchant: 利用した店舗・サービス名。決済代行会社の識別子（「SQ*」「AMZ*」等）や余計な記号は除いて、一般的な店名にしてください（例:「ＳＱ＊スターバックスコーヒー」→「スターバックス」）',
+    '- merchant: 利用した店舗・サービス名。決済代行会社の識別子（「SQ*」「AMZ*」等）や余計な記号、',
+    '  「（返品）」等の返金を示す注記は除いて、一般的な店名にしてください',
+    '  （例:「ＳＱ＊スターバックスコーヒー」→「スターバックス」、「PAYPAL *ALIPAY EUR（返品）」→「PAYPAL *ALIPAY EUR」）',
     '- category: 利用内容から最も適したものを1つ選択（food/daily/entertainment/transport/communication/subscription/investment/travel/beauty/procurement/social/otherのいずれか。Netflix・Spotify等の定額サービスはsubscription、証券会社・積立・暗号資産などはinvestment）',
-    '- amount: 利用金額（円。数字のみ、カンマなし）',
+    '- amount: 利用金額（円。数字のみ、カンマなし、符号なし）',
     `- date: 利用日（YYYY-MM-DD形式）。本文に年の記載が無ければ ${currentYear} 年として補完してください`,
+    '- is_refund: 返品・返金・キャンセル・取消による入金なら true、通常の購入なら false',
     cardHint,
     '',
     `件名: ${subject}`,
@@ -393,6 +407,7 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
           },
           amount: { type: 'INTEGER' },
           date: { type: 'STRING' },
+          is_refund: { type: 'BOOLEAN' },
         },
         required: ['is_purchase_notification'],
       },
@@ -437,6 +452,7 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
       category: parsed.category || null,
       amount: Number.isFinite(amount) && amount > 0 ? amount : null,
       date: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? parsed.date : null,
+      isRefund: !!parsed.is_refund,
     },
   };
 }
@@ -501,6 +517,14 @@ function evaluateForImport_(extracted, subject, body, existingCards) {
 // （アプリ側 src/App.jsx の toComparableText と同じ考え方）。
 function toComparableText_(str) {
   return String(str || '').normalize('NFKC').toLowerCase();
+}
+
+// 返品・返金の通知はamountをマイナスにして保存する（アプリ側は符号だけで
+// 支出／返金を区別しており、専用のフィールドは持たない。src/App.jsxの
+// formatSignedYenと同じ考え方）。amountがnullの場合はnullのまま返す。
+function signedAmount_(amount, isRefund) {
+  if (amount === null || amount === undefined) return amount;
+  return isRefund ? -Math.abs(amount) : amount;
 }
 
 /**
