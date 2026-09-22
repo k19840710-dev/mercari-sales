@@ -2587,7 +2587,7 @@ export default function App() {
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
                               <div>{tx.date}{timeLabel}</div>
-                              <div className="text-slate-300 font-medium truncate">{paymentLabel} ・ {categoryObj.name}</div>
+                              <div className="text-slate-300 font-medium truncate">{paymentLabel}</div>
                             </div>
                           </div>
                         </div>
