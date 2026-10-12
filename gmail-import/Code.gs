@@ -133,120 +133,135 @@ function checkCardEmails() {
             return;
           }
 
-          const decision = evaluateForImport_(extracted.data, subject, body, existingCards);
           const messageDate = message.getDate();
-
-          if (decision.action === 'pending') {
-            // 自動登録の条件を満たさなかった（確信度不足／必須項目不足／登録済み
-            // カードと一致しない、のいずれか）。削除はせず確認待ちに保存し、
-            // アプリ側でユーザーに判断してもらう。
-            upsertPendingImport_(accessToken, `p-gmail-${message.getId()}`, {
-              subject,
-              from: message.getFrom() || '',
-              receivedAt: messageDate.toISOString(),
-              amount: signedAmount_(extracted.data.amount, extracted.data.isRefund),
-              date: extracted.data.date,
-              merchant: extracted.data.merchant,
-              issuerNameGuess: extracted.data.issuerName,
-              last4Guess: extracted.data.last4,
-              category: extracted.data.category,
-              reason: decision.reason,
-              status: 'pending',
-              createdAt: new Date().toISOString(),
-            });
-            console.log(`確認待ちに追加: "${subject}" → ${decision.reason}`);
-            pendingCount += 1;
-            return;
-          }
-
-          // ここに来るのは decision.action === 'register'（自動登録OK）の場合のみ。
-          // decision.card は、AIの抽出結果（カード番号下4桁 or カード名の完全一致）が
-          // 実際に登録済みのカードと一致した結果であり、新規作成されたものではない。
-          const { issuerName, merchant, amount, date, isRefund } = extracted.data;
-          const cardId = decision.card.id;
-          // 返品・返金の通知は、家計簿上は支出のマイナス（入金）として扱う。
-          // 見た目のUIや合計計算はamountの符号だけで判定するので、ここで符号を
-          // 決めてしまえば以降のコードは通常の購入と同じロジックで良い。
-          const signedAmount = signedAmount_(amount, isRefund);
-
-          // 「コミックシーモア　サクヒン　ポイント」のような余計な文字を削り、知っている
-          // 店名なら正式名称＋カテゴリに寄せる（src/App.jsxのOCR取込と同じ表記に揃うので、
-          // ここを優先する）。知らない店名だけ、AI自身が返した店名・カテゴリを使う。
-          const known = findKnownMerchant_(merchant);
-          const finalName = known ? known.name : (merchant || issuerName || decision.card.name);
-          const finalCategory = known ? known.category : (extracted.data.category || guessCategory_(merchant));
-
-          // 同じ支払いについて、メルペイ経由の通知とEXIMBAY/PayPalのような決済代行
-          // 会社自体からの通知のように、別々のサービスから2通メールが来ることがある。
-          // どちらも内容として正しいため通常のメッセージID単位の重複防止（同じメールを
-          // 2回処理しない）では防げない。ただし「金額・日付が一致」というだけで弾くと、
-          // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう
-          // ので、実際に受信時刻がほぼ同時（数分以内）かどうかで見分ける。同じ決済
-          // イベントから同時に発生する別チャネル通知は受信がほぼ同時になるが、別々の
-          // 買い物は数分以上ずれることが多いため。符号付き金額で照合するので、通常の
-          // 購入とその後の返品（符号が逆）を誤って同一視することもない。
-          const duplicate = findDuplicateTransaction_(accessToken, signedAmount, date);
           const messageTime = messageDate.getTime();
-          const existingTime = duplicate && duplicate.gmailReceivedAt ? new Date(duplicate.gmailReceivedAt).getTime() : null;
-          // 受信時刻の記録が無い明細（手動入力・アプリ内OCR取込・確認待ちからの
-          // 手動登録・本機能追加前のGmail取込）は比較しようがないので、既に
-          // 記録済みとみなして安全側に倒す（重複作成はしない）。
-          const isSameEvent = !!duplicate && (existingTime === null || Math.abs(messageTime - existingTime) <= SAME_EVENT_WINDOW_MS);
 
-          if (isSameEvent) {
-            // 店名・カテゴリは、知っている店名リスト（KNOWN_MERCHANTS_）に一致する、
-            // より具体的な方を採用する（例: 決済代行会社の領収書にしか店名が書かれて
-            // いないことがあるため、先に処理された方を丸ごと勝ちにはしない）。
-            const existingIsKnownMerchant = !!(duplicate.merchant && findKnownMerchant_(duplicate.merchant));
-            const useExisting = existingIsKnownMerchant && !known;
-            const patchMerchant = useExisting ? duplicate.merchant : finalName;
-            const patchCategory = useExisting ? (duplicate.category || finalCategory) : finalCategory;
-            const patchReceivedAt = existingTime !== null
-              ? new Date(Math.min(existingTime, messageTime)).toISOString()
-              : new Date(messageTime).toISOString();
+          // 「ご利用明細のお知らせ」のように1通に複数明細が入っていることがあるので、
+          // 明細ごとに判定・登録する。1件しかない通常のメールも要素数1の配列として
+          // 扱われる（extractEmailInfo_側で揃えている）。メールのメッセージIDだけだと
+          // 複数明細が同じドキュメントIDを奪い合ってしまうので、配列内の位置(i)を
+          // サフィックスに付けてIDを明細ごとに分ける。
+          extracted.data.items.forEach((item, i) => {
+            const decision = evaluateForImport_(
+              { confidence: extracted.data.confidence, issuerName: extracted.data.issuerName, last4: extracted.data.last4, ...item },
+              subject,
+              body,
+              existingCards,
+            );
 
-            // カードは、今回・既存どちらも「登録済みカードと一致」した結果なので、
-            // 一致しない場合に無理に付け替えると誤りのリスクがある。カードは既存の
-            // ままにし、店名・カテゴリの補完だけ行う。
-            if (duplicate.cardId && duplicate.cardId !== cardId) {
-              console.warn(`重複通知だがカードの判定が一致しません（既存: ${duplicate.cardId} / 今回: ${cardId}）。カードはそのままに、店名・カテゴリのみ補完します。`);
-            }
-
-            if (patchMerchant === duplicate.merchant && patchCategory === duplicate.category) {
-              console.log(`重複のためスキップ: ${date} ¥${signedAmount} (${issuerName}/${merchant})`);
-            } else {
-              console.log(`重複を補完: ${date} ¥${signedAmount} → 店名「${patchMerchant}」`);
-              firestoreRequest_(accessToken, 'patch', duplicate.url, {
-                fields: toFirestoreFields_({
-                  cardId: duplicate.cardId || cardId,
-                  amount: signedAmount,
-                  date,
-                  category: patchCategory,
-                  merchant: patchMerchant,
-                  memo: '',
-                  gmailReceivedAt: patchReceivedAt,
-                  paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
-                  source: 'email',
-                }),
+            if (decision.action === 'pending') {
+              // 自動登録の条件を満たさなかった（確信度不足／必須項目不足／登録済み
+              // カードと一致しない、のいずれか）。削除はせず確認待ちに保存し、
+              // アプリ側でユーザーに判断してもらう。
+              upsertPendingImport_(accessToken, `p-gmail-${message.getId()}-${i}`, {
+                subject,
+                from: message.getFrom() || '',
+                receivedAt: messageDate.toISOString(),
+                amount: signedAmount_(item.amount, item.isRefund),
+                date: item.date,
+                merchant: item.merchant,
+                issuerNameGuess: extracted.data.issuerName,
+                last4Guess: extracted.data.last4,
+                category: item.category,
+                reason: decision.reason,
+                status: 'pending',
+                createdAt: new Date().toISOString(),
               });
+              console.log(`確認待ちに追加: "${subject}" (${i}) → ${decision.reason}`);
+              pendingCount += 1;
+              return;
             }
-            return;
-          }
 
-          // メールのメッセージIDから決まる固定IDにしておくことで、同じメールを
-          // 何度処理しても重複した明細ができない（既存ドキュメントを上書きするだけ）。
-          createTransaction_(accessToken, `t-gmail-${message.getId()}`, {
-            cardId,
-            amount: signedAmount,
-            date,
-            category: finalCategory,
-            merchant: finalName,
-            memo: '',
-            gmailReceivedAt: new Date(messageTime).toISOString(),
-            paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
-            source: 'email',
+            // ここに来るのは decision.action === 'register'（自動登録OK）の場合のみ。
+            // decision.card は、AIの抽出結果（カード番号下4桁 or カード名の完全一致）が
+            // 実際に登録済みのカードと一致した結果であり、新規作成されたものではない。
+            const { issuerName } = extracted.data;
+            const { merchant, amount, date, isRefund } = item;
+            const cardId = decision.card.id;
+            // 返品・返金の通知は、家計簿上は支出のマイナス（入金）として扱う。
+            // 見た目のUIや合計計算はamountの符号だけで判定するので、ここで符号を
+            // 決めてしまえば以降のコードは通常の購入と同じロジックで良い。
+            const signedAmount = signedAmount_(amount, isRefund);
+
+            // 「コミックシーモア　サクヒン　ポイント」のような余計な文字を削り、知っている
+            // 店名なら正式名称＋カテゴリに寄せる（src/App.jsxのOCR取込と同じ表記に揃うので、
+            // ここを優先する）。知らない店名だけ、AI自身が返した店名・カテゴリを使う。
+            const known = findKnownMerchant_(merchant);
+            const finalName = known ? known.name : (merchant || issuerName || decision.card.name);
+            const finalCategory = known ? known.category : (item.category || guessCategory_(merchant));
+
+            // 同じ支払いについて、メルペイ経由の通知とEXIMBAY/PayPalのような決済代行
+            // 会社自体からの通知のように、別々のサービスから2通メールが来ることがある。
+            // どちらも内容として正しいため通常のメッセージID単位の重複防止（同じメールを
+            // 2回処理しない）では防げない。ただし「金額・日付が一致」というだけで弾くと、
+            // 同じカードで同額の買い物をたまたま同じ日に2回した場合まで片方が消えてしまう
+            // ので、実際に受信時刻がほぼ同時（数分以内）かどうかで見分ける。同じ決済
+            // イベントから同時に発生する別チャネル通知は受信がほぼ同時になるが、別々の
+            // 買い物は数分以上ずれることが多いため。符号付き金額で照合するので、通常の
+            // 購入とその後の返品（符号が逆）を誤って同一視することもない。
+            const duplicate = findDuplicateTransaction_(accessToken, signedAmount, date);
+            const existingTime = duplicate && duplicate.gmailReceivedAt ? new Date(duplicate.gmailReceivedAt).getTime() : null;
+            // 受信時刻の記録が無い明細（手動入力・アプリ内OCR取込・確認待ちからの
+            // 手動登録・本機能追加前のGmail取込）は比較しようがないので、既に
+            // 記録済みとみなして安全側に倒す（重複作成はしない）。
+            const isSameEvent = !!duplicate && (existingTime === null || Math.abs(messageTime - existingTime) <= SAME_EVENT_WINDOW_MS);
+
+            if (isSameEvent) {
+              // 店名・カテゴリは、知っている店名リスト（KNOWN_MERCHANTS_）に一致する、
+              // より具体的な方を採用する（例: 決済代行会社の領収書にしか店名が書かれて
+              // いないことがあるため、先に処理された方を丸ごと勝ちにはしない）。
+              const existingIsKnownMerchant = !!(duplicate.merchant && findKnownMerchant_(duplicate.merchant));
+              const useExisting = existingIsKnownMerchant && !known;
+              const patchMerchant = useExisting ? duplicate.merchant : finalName;
+              const patchCategory = useExisting ? (duplicate.category || finalCategory) : finalCategory;
+              const patchReceivedAt = existingTime !== null
+                ? new Date(Math.min(existingTime, messageTime)).toISOString()
+                : new Date(messageTime).toISOString();
+
+              // カードは、今回・既存どちらも「登録済みカードと一致」した結果なので、
+              // 一致しない場合に無理に付け替えると誤りのリスクがある。カードは既存の
+              // ままにし、店名・カテゴリの補完だけ行う。
+              if (duplicate.cardId && duplicate.cardId !== cardId) {
+                console.warn(`重複通知だがカードの判定が一致しません（既存: ${duplicate.cardId} / 今回: ${cardId}）。カードはそのままに、店名・カテゴリのみ補完します。`);
+              }
+
+              if (patchMerchant === duplicate.merchant && patchCategory === duplicate.category) {
+                console.log(`重複のためスキップ: ${date} ¥${signedAmount} (${issuerName}/${merchant})`);
+              } else {
+                console.log(`重複を補完: ${date} ¥${signedAmount} → 店名「${patchMerchant}」`);
+                firestoreRequest_(accessToken, 'patch', duplicate.url, {
+                  fields: toFirestoreFields_({
+                    cardId: duplicate.cardId || cardId,
+                    amount: signedAmount,
+                    date,
+                    category: patchCategory,
+                    merchant: patchMerchant,
+                    memo: '',
+                    gmailReceivedAt: patchReceivedAt,
+                    paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+                    source: 'email',
+                  }),
+                });
+              }
+              return;
+            }
+
+            // メールのメッセージID＋配列内位置から決まる固定IDにしておくことで、
+            // 同じメールを誤って2回処理しても重複した明細ができない（既存ドキュメントを
+            // 上書きするだけ）。
+            createTransaction_(accessToken, `t-gmail-${message.getId()}-${i}`, {
+              cardId,
+              amount: signedAmount,
+              date,
+              category: finalCategory,
+              merchant: finalName,
+              memo: '',
+              gmailReceivedAt: new Date(messageTime).toISOString(),
+              paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+              source: 'email',
+            });
+            importedCount += 1;
           });
-          importedCount += 1;
         } catch (err) {
           lastError = String(err);
           threadHadFailure = true;
@@ -382,17 +397,24 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
     '　 ようなカード会社側の確定通知として別途届くので、そちらで捕捉します。',
     '　 → これは is_purchase_notification を false にしてください（登録も確認待ちも不要です）。',
     '',
-    '利用確定の通知メールだと判断した場合は、以下も抽出してください（わからない項目はnull）:',
+    '注意: 1通のメールに複数の利用・返品がまとめて記載されていることがあります',
+    '（例:「ご利用明細のお知らせ」のように、一定期間分の利用をまとめて知らせるメール）。',
+    'その場合は見つかった明細の数だけ items 配列に入れてください。1件しかなければ',
+    'items は要素数1の配列にしてください。',
+    '',
+    '利用確定の通知メールだと判断した場合は、以下も抽出してください:',
     '- confidence: 判定・抽出内容にどれだけ自信があるか（high/medium/lowのいずれか）',
-    '- issuer_name: カード会社・決済サービス名（例: 「メルカード」「三井住友カード」「楽天カード」など。件名や本文、署名から判断）',
+    '- issuer_name: カード会社・決済サービス名（例: 「メルカード」「三井住友カード」「楽天カード」など。件名や本文、署名から判断。わからなければnull）',
     '- last4: カード番号の下4桁（半角数字4桁。本文に記載が無ければnull。「＊＊＊＊1234」等の末尾4桁も対象）',
-    '- merchant: 利用した店舗・サービス名。決済代行会社の識別子（「SQ*」「AMZ*」等）や余計な記号、',
-    '  「（返品）」等の返金を示す注記は除いて、一般的な店名にしてください',
-    '  （例:「ＳＱ＊スターバックスコーヒー」→「スターバックス」、「PAYPAL *ALIPAY EUR（返品）」→「PAYPAL *ALIPAY EUR」）',
-    '- category: 利用内容から最も適したものを1つ選択（food/daily/entertainment/transport/communication/subscription/investment/travel/beauty/procurement/social/otherのいずれか。Netflix・Spotify等の定額サービスはsubscription、証券会社・積立・暗号資産などはinvestment）',
-    '- amount: 利用金額（円。数字のみ、カンマなし、符号なし）',
-    `- date: 利用日（YYYY-MM-DD形式）。本文に年の記載が無ければ ${currentYear} 年として補完してください`,
-    '- is_refund: 返品・返金・キャンセル・取消による入金なら true、通常の購入なら false',
+    '- items: 明細の配列。各要素はわからない項目はnullにして、以下を抽出してください:',
+    '  - merchant: 利用した店舗・サービス名。決済代行会社の識別子（「SQ*」「AMZ*」等）や余計な記号、',
+    '    「（返品）」等の返金を示す注記は除いて、一般的な店名にしてください',
+    '    （例:「ＳＱ＊スターバックスコーヒー」→「スターバックス」、「PAYPAL *ALIPAY EUR（返品）」→「PAYPAL *ALIPAY EUR」）',
+    '  - category: 利用内容から最も適したものを1つ選択（food/daily/entertainment/transport/communication/subscription/investment/travel/beauty/procurement/social/otherのいずれか。Netflix・Spotify等の定額サービスはsubscription、証券会社・積立・暗号資産などはinvestment）',
+    '  - amount: 利用金額（円。数字のみ、カンマなし、符号なし。本文に「-3,776円」のようにマイナス表記',
+    '    があっても、符号は無視してis_refundで表現し、amountは絶対値を入れてください）',
+    `  - date: 利用日（YYYY-MM-DD形式）。本文に年の記載が無ければ ${currentYear} 年として補完してください`,
+    '  - is_refund: 返品・返金・キャンセル・取消による入金なら true、通常の購入なら false',
     cardHint,
     '',
     `件名: ${subject}`,
@@ -411,14 +433,22 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
           confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] },
           issuer_name: { type: 'STRING' },
           last4: { type: 'STRING' },
-          merchant: { type: 'STRING' },
-          category: {
-            type: 'STRING',
-            enum: ['food', 'daily', 'entertainment', 'transport', 'communication', 'subscription', 'investment', 'travel', 'beauty', 'procurement', 'social', 'other'],
+          items: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                merchant: { type: 'STRING' },
+                category: {
+                  type: 'STRING',
+                  enum: ['food', 'daily', 'entertainment', 'transport', 'communication', 'subscription', 'investment', 'travel', 'beauty', 'procurement', 'social', 'other'],
+                },
+                amount: { type: 'INTEGER' },
+                date: { type: 'STRING' },
+                is_refund: { type: 'BOOLEAN' },
+              },
+            },
           },
-          amount: { type: 'INTEGER' },
-          date: { type: 'STRING' },
-          is_refund: { type: 'BOOLEAN' },
         },
         required: ['is_purchase_notification'],
       },
@@ -449,8 +479,31 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
 
   // ここでは緩く受け取るだけで、登録可否の厳密な判定はしない
   // （必須項目が欠けていても、そのまま確認待ちに回るだけで済むようにするため）。
-  const amount = Number(parsed.amount);
   const last4 = String(parsed.last4 || '').trim();
+
+  // 1通に複数明細（「ご利用明細のお知らせ」等）が入っている場合に対応するため、
+  // 明細は常に配列で扱う。古い形式（トップレベルに直接amount等を持つ）がもし
+  // 返ってきても1件の配列として扱えるよう、念のためフォールバックしておく。
+  const rawItems = Array.isArray(parsed.items) && parsed.items.length
+    ? parsed.items
+    : (parsed.amount !== undefined ? [parsed] : []);
+
+  const items = rawItems
+    .map((raw) => {
+      const amount = Number(raw.amount);
+      return {
+        merchant: raw.merchant ? String(raw.merchant).trim() : null,
+        category: raw.category || null,
+        amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.date || '')) ? raw.date : null,
+        isRefund: !!raw.is_refund,
+      };
+    })
+    .filter((item) => item.amount !== null || item.date !== null || item.merchant !== null);
+
+  if (!items.length) {
+    return { status: 'not_purchase' };
+  }
 
   return {
     status: 'ok',
@@ -459,11 +512,7 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
       confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
       issuerName: parsed.issuer_name ? String(parsed.issuer_name).trim() : null,
       last4: /^\d{4}$/.test(last4) ? last4 : null,
-      merchant: parsed.merchant ? String(parsed.merchant).trim() : null,
-      category: parsed.category || null,
-      amount: Number.isFinite(amount) && amount > 0 ? amount : null,
-      date: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? parsed.date : null,
-      isRefund: !!parsed.is_refund,
+      items,
     },
   };
 }
@@ -471,9 +520,10 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
 // メール本文に「利用確定の通知」特有の言い回しが含まれているかを、AIに頼らず
 // コード側で機械的にチェックする。AIの is_purchase_notification 判定への
 // 二重チェックとして使う（「複数の情報が確認できた場合のみ自動登録する」の一部）。
-// カード会社からの返金確定通知（例:「メルカードご利用分の返金がありました」）も
-// この安全網を通す必要があるので、返金確定を示す言い回しも含めている。
-const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用のお知らせ|利用速報|ご利用いただき|ご利用金額|カードのご利用|(の|で)(お)?支払いが?ありました|決済されました|決済が完了|お支払い(の)?確認|ショッピング利用|返金がありました|ご利用分の返金|返金いたしました|返金が完了)/;
+// カード会社からの返金確定通知（例:「メルカードご利用分の返金がありました」）や、
+// 複数明細をまとめた「ご利用明細のお知らせ」（「ご利用のお知らせ」と表現が近いだけで
+// 別フレーズなのでこの安全網には別途含めている）も通す必要がある。
+const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用(明細)?のお知らせ|利用速報|ご利用いただき|ご利用金額|カードのご利用|(の|で)(お)?支払いが?ありました|決済されました|決済が完了|お支払い(の)?確認|ショッピング利用|返金がありました|ご利用分の返金|返金いたしました|返金が完了)/;
 
 /**
  * AIの抽出結果・本文の文言・登録済みカード一覧から、「自動登録してよいか／
