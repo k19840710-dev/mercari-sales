@@ -1498,14 +1498,6 @@ export default function App() {
       .sort((a, b) => a.paymentDate - b.paymentDate);
   }, [cards, transactions]);
 
-  // 今月残りの支払予定額（支払日が今月かつ未来のものだけ合計）
-  const remainingThisMonthTotal = useMemo(() => {
-    const today = new Date();
-    return paymentSchedule
-      .filter((p) => p.paymentDate.getFullYear() === today.getFullYear() && p.paymentDate.getMonth() === today.getMonth())
-      .reduce((sum, p) => sum + p.amount, 0);
-  }, [paymentSchedule]);
-
   // 引落口座ごとの必要額（今月分・銀行口座を設定しているカードのみ）
   const bankAccountTotals = useMemo(() => {
     const today = new Date();
@@ -2400,7 +2392,7 @@ export default function App() {
               )}
             </div>
 
-            {/* ② 支払予定（クレジットカードの今月残り＋直近の支払いを複数枚表示） */}
+            {/* ② 支払予定（クレジットカードの直近の支払いを複数枚表示） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支払予定（クレジットカード）</p>
@@ -2416,26 +2408,22 @@ export default function App() {
               {paymentSchedule.length === 0 ? (
                 <p className="text-sm text-slate-500">予定なし（カードに締め日・支払日を設定してください）</p>
               ) : (
-                <>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[11px] text-slate-500">今月残り</span>
-                    <span className="text-xl font-bold text-white">¥{remainingThisMonthTotal.toLocaleString()}</span>
-                  </div>
-                  <div className="divide-y divide-slate-700/50">
-                    {paymentSchedule.slice(0, 3).map(({ card, paymentDate, amount, daysUntil }) => (
-                      <div key={card.id} className="py-2 flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <span className="text-[11px] text-slate-500">
-                            {paymentDate.getMonth() + 1}/{paymentDate.getDate()}
-                            {daysUntil <= 3 && (daysUntil === 0 ? '（今日）' : `（あと${daysUntil}日）`)}
-                          </span>
-                          <div className="text-sm font-semibold text-indigo-300 truncate">{card.name}</div>
+                <div className="divide-y divide-slate-700/50">
+                  {paymentSchedule.slice(0, 3).map(({ card, paymentDate, amount, daysUntil }) => (
+                    <div key={card.id} className="py-2.5 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-white truncate">
+                          {paymentDate.getMonth() + 1}/{paymentDate.getDate()}
+                          <span className="ml-2 text-slate-300 font-normal">{card.name}</span>
                         </div>
-                        <span className="text-sm font-bold text-white shrink-0">¥{amount.toLocaleString()}</span>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          {daysUntil === 0 ? '今日' : `あと${daysUntil}日`}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </>
+                      <span className="text-base font-bold text-white shrink-0">¥{amount.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -3374,32 +3362,6 @@ export default function App() {
                   </div>
                 );
               })}
-            </div>
-
-            {/* 支払い予定（旧・独立タブ。カード管理の一部として統合） */}
-            {/* 支払予定一覧 */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-              <h2 className="text-lg font-bold text-white mb-4">支払予定一覧</h2>
-              {paymentSchedule.length === 0 ? (
-                <p className="text-sm text-slate-500">支払予定はありません。カードに締め日・支払日を設定してください。</p>
-              ) : (
-                <div className="divide-y divide-slate-700/50">
-                  {paymentSchedule.map(({ card, paymentDate, amount, daysUntil }) => (
-                    <div key={card.id} className="py-3 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-white">
-                          {paymentDate.getMonth() + 1}/{paymentDate.getDate()}
-                          <span className="ml-2 text-slate-300 font-normal truncate">{card.name}</span>
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          {daysUntil === 0 ? '今日' : `あと${daysUntil}日`}
-                        </div>
-                      </div>
-                      <div className="text-base font-bold text-white shrink-0">¥{amount.toLocaleString()}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* 定期支出（サブスクなど） */}
