@@ -420,6 +420,22 @@ function findNextUnpaidCycle(card, today = new Date()) {
   return null;
 }
 
+/**
+ * 今日時点でまだ締まっていない（＝今日使ったらここに乗る）請求サイクルを求める。
+ * findNextUnpaidCycleは「支払日がまだ来ていない直近のサイクル」なので、締め日は
+ * 今日より前に過ぎていることがある（＝支払い待ちの確定済み金額）。それとは違い、
+ * こちらは「現在進行形で積み上がっている利用額」を知りたい場合に使う
+ * （cycleEnd が今日以降＝まだ締まっていないサイクルを探す）。
+ */
+function findCurrentOpenCycle(card, today = new Date()) {
+  const todayKey = toDateKey(today);
+  for (let offset = -1; offset <= 3; offset += 1) {
+    const cycle = getCardCycleForPaymentMonth(card, today.getFullYear(), today.getMonth() + offset);
+    if (cycle && cycle.cycleEnd >= todayKey) return cycle;
+  }
+  return null;
+}
+
 /** 指定した請求サイクルに該当する明細の合計額。 */
 function sumTransactionsInCycle(transactions, cardId, cycle) {
   if (!cycle) return 0;
@@ -1076,15 +1092,23 @@ export default function App() {
     return tx.cardId ? (card?.name || '削除されたカード') : (method?.name || 'その他');
   };
 
-  // カード別の当月利用額集計
+  // カード別の利用額集計（締め日ベースの請求サイクル単位。暦月だと締め日が
+  // 月末以外のカードで「今月使った額」と「今積み上がっている利用額」がズレて
+  // しまうため、まだ締まっていない進行中のサイクルの実績をそのまま使う
+  // （支払予定セクションの「支払待ちの確定額」とは別物 ―― そちらは
+  // findNextUnpaidCycleが担当）。締め日・支払日が未設定のカードだけ、従来通り
+  // 暦月の合計にフォールバックする。
   const cardMonthlyStats = useMemo(() => {
+    const today = new Date();
     return cards.map((card) => {
-      const cardTxs = monthlyTransactions.filter((t) => t.cardId === card.id);
-      const spent = cardTxs.reduce((sum, t) => sum + Number(t.amount), 0);
+      const cycle = findCurrentOpenCycle(card, today);
+      const spent = cycle
+        ? sumTransactionsInCycle(transactions, card.id, cycle)
+        : monthlyTransactions.filter((t) => t.cardId === card.id).reduce((sum, t) => sum + Number(t.amount), 0);
       const percentage = card.limit ? Math.min(Math.round((spent / card.limit) * 100), 100) : 0;
-      return { ...card, spent, percentage };
+      return { ...card, spent, percentage, cycleEnd: cycle?.cycleEnd || null };
     });
-  }, [cards, monthlyTransactions]);
+  }, [cards, transactions, monthlyTransactions]);
 
   // カードごとの「今年の累計・月平均」（カード管理タブの詳細表示用）
   const cardYearlyStats = useMemo(() => {
@@ -2405,7 +2429,14 @@ export default function App() {
                 <div className="divide-y divide-slate-700/50">
                   {cardMonthlyStats.map((card) => (
                     <div key={card.id} className="py-2.5 flex items-center justify-between gap-3">
-                      <span className="text-sm text-slate-300 truncate">{card.name}</span>
+                      <div className="min-w-0">
+                        <span className="text-sm text-slate-300 truncate block">{card.name}</span>
+                        {card.cycleEnd && (
+                          <span className="text-[11px] text-slate-500">
+                            〜{Number(card.cycleEnd.slice(5, 7))}/{Number(card.cycleEnd.slice(8, 10))}締め
+                          </span>
+                        )}
+                      </div>
                       <span className="text-sm font-bold text-white shrink-0">¥{card.spent.toLocaleString()}</span>
                     </div>
                   ))}
