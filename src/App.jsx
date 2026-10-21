@@ -1489,12 +1489,18 @@ export default function App() {
     || filterDateFrom || filterDateTo || filterAmountMin || filterAmountMax || searchQuery;
 
   // --- アクションハンドラー ---
+  // カレンダータブで日付を選択中に「記録」すると、過去の明細を登録したい
+  // ケースがほとんどなので今日ではなくその日付を初期値にする。それ以外の
+  // タブでは従来通り今日。
   const resetNewTxForm = () => {
+    const defaultDate = (activeTab === 'calendar' && selectedCalendarDate)
+      ? selectedCalendarDate
+      : new Date().toISOString().split('T')[0];
     setNewTx({
       paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
       cardId: cards[0]?.id || '',
       amount: '',
-      date: new Date().toISOString().split('T')[0],
+      date: defaultDate,
       category: 'food',
       merchant: '',
       memo: '',
