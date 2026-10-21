@@ -60,6 +60,8 @@ import {
   pendingImportDocRef,
   getPaymentMethodsColRef,
   paymentMethodDocRef,
+  getRecurringTransactionsColRef,
+  recurringTransactionDocRef,
   gmailImportStatusDocRef,
   setDoc,
   deleteDoc,
@@ -721,10 +723,12 @@ export default function App() {
   const [isAddTransactionOpen, setIsAddTransactionOpen] = useState(false);
   const [isAddCardOpen, setIsAddCardOpen] = useState(false);
   const [isPendingReviewOpen, setIsPendingReviewOpen] = useState(false);
+  const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
 
   // 編集中のID（nullなら新規追加モード）
   const [editingTxId, setEditingTxId] = useState(null);
   const [editingCardId, setEditingCardId] = useState(null);
+  const [editingRecurringId, setEditingRecurringId] = useState(null);
   // 確認待ちの利用通知から「このカードを追加する」で開いた場合、そのカード保存後に
   // 続けて明細を作成し、確認待ちから消すために覚えておくID
   const [resolvingPendingId, setResolvingPendingId] = useState(null);
@@ -862,6 +866,80 @@ export default function App() {
     })();
   }, [authUser]);
 
+  // 定期支出（サブスクなど）テンプレートのリアルタイム購読
+  const [recurringTransactions, setRecurringTransactions] = useState([]);
+  useEffect(() => {
+    if (!authUser) return undefined;
+    const unsub = onSnapshot(
+      getRecurringTransactionsColRef(authUser.uid),
+      (snap) => setRecurringTransactions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (err) => console.error('定期支出の同期に失敗しました', err)
+    );
+    return unsub;
+  }, [authUser]);
+
+  // 定期支出テンプレートから、まだ作られていない月の分の明細を自動生成する。
+  // サーバー常駐の仕組みが無いアプリなので「毎月自動で」ではなく「アプリを開いた
+  // ときに、まだ無い月の分をまとめて追いつかせる」という動き方になる。テンプレート
+  // 登録前の月には遡らない（登録した月〜今月だけが対象）。固定ID
+  // (t-recurring-テンプレートID-年月) で作るので、二重に生成されることはない。
+  useEffect(() => {
+    if (!authUser || recurringTransactions.length === 0) return;
+    const today = new Date();
+    const todayKey = toDateKey(today);
+    const existingIds = new Set(transactions.map((t) => t.id));
+
+    const toCreate = [];
+    recurringTransactions.forEach((template) => {
+      if (template.isActive === false) return;
+      const dayNum = parseDayNumber(template.dayOfMonth);
+      if (!dayNum || !template.amount || !template.createdAt) return;
+
+      const start = new Date(template.createdAt);
+      let y = start.getFullYear();
+      let m = start.getMonth();
+      const endY = today.getFullYear();
+      const endM = today.getMonth();
+
+      while (y < endY || (y === endY && m <= endM)) {
+        const occurrenceDate = dateForDayInMonth(y, m, dayNum);
+        const occurrenceKey = toDateKey(occurrenceDate);
+        if (occurrenceKey <= todayKey) {
+          const monthTag = `${y}-${String(m + 1).padStart(2, '0')}`;
+          const txId = `t-recurring-${template.id}-${monthTag}`;
+          if (!existingIds.has(txId)) {
+            toCreate.push({
+              id: txId,
+              cardId: template.cardId || null,
+              paymentMethodId: template.paymentMethodId,
+              amount: Number(template.amount),
+              date: occurrenceKey,
+              category: template.category || 'subscription',
+              merchant: template.name,
+              memo: template.memo || '',
+              source: 'recurring',
+            });
+          }
+        }
+        m += 1;
+        if (m > 11) { m = 0; y += 1; }
+      }
+    });
+
+    if (toCreate.length === 0) return;
+    (async () => {
+      try {
+        const batch = writeBatch(db);
+        toCreate.forEach(({ id, ...data }) => {
+          batch.set(transactionDocRef(authUser.uid, id), data);
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error('定期支出の自動登録に失敗しました', err);
+      }
+    })();
+  }, [authUser, recurringTransactions, transactions]);
+
   // 認証ゲート（未ログイン端末向け）フォームのステート
   const [gateEmail, setGateEmail] = useState('');
   const [gatePassword, setGatePassword] = useState('');
@@ -987,6 +1065,17 @@ export default function App() {
     paymentDay: '27',
     weekendAdjustment: 'none',
     bankAccount: '',
+  });
+
+  // 新規定期支出（サブスクなど）フォームのステート
+  const [newRecurring, setNewRecurring] = useState({
+    name: '',
+    amount: '',
+    paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+    cardId: cards[0]?.id || '',
+    category: 'subscription',
+    dayOfMonth: '1',
+    memo: '',
   });
 
   // カード番号・有効期限・セキュリティコードを表示中のカードID
@@ -1524,6 +1613,18 @@ export default function App() {
     });
   };
 
+  const resetNewRecurringForm = () => {
+    setNewRecurring({
+      name: '',
+      amount: '',
+      paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+      cardId: cards[0]?.id || '',
+      category: 'subscription',
+      dayOfMonth: '1',
+      memo: '',
+    });
+  };
+
   const handleCloseTransactionModal = () => {
     setIsAddTransactionOpen(false);
     setEditingTxId(null);
@@ -1535,6 +1636,12 @@ export default function App() {
     setEditingCardId(null);
     setResolvingPendingId(null);
     resetNewCardForm();
+  };
+
+  const handleCloseRecurringModal = () => {
+    setIsRecurringModalOpen(false);
+    setEditingRecurringId(null);
+    resetNewRecurringForm();
   };
 
   const handleOpenEditTransaction = (tx) => {
@@ -1570,6 +1677,26 @@ export default function App() {
     });
     setEditingCardId(card.id);
     setIsAddCardOpen(true);
+  };
+
+  const handleOpenAddRecurring = () => {
+    resetNewRecurringForm();
+    setEditingRecurringId(null);
+    setIsRecurringModalOpen(true);
+  };
+
+  const handleOpenEditRecurring = (template) => {
+    setNewRecurring({
+      name: template.name || '',
+      amount: String(template.amount ?? ''),
+      paymentMethodId: template.paymentMethodId || PAYMENT_METHOD_CREDIT_CARD_ID,
+      cardId: template.cardId || cards[0]?.id || '',
+      category: template.category || 'subscription',
+      dayOfMonth: template.dayOfMonth || '1',
+      memo: template.memo || '',
+    });
+    setEditingRecurringId(template.id);
+    setIsRecurringModalOpen(true);
   };
 
   // カード番号入力：常に数字だけをstateに保持し、表示だけ4桁区切りにする。
@@ -1782,6 +1909,49 @@ export default function App() {
       } catch (err) {
         console.error(err);
         alert('カードの削除に失敗しました。');
+      }
+    }
+  };
+
+  const handleSaveRecurring = async (e) => {
+    e.preventDefault();
+    if (!newRecurring.name || !newRecurring.amount || !authUser) return;
+
+    const isCreditCard = (paymentMethods.find((m) => m.id === newRecurring.paymentMethodId)?.type ?? 'credit_card') === 'credit_card';
+    const data = {
+      name: newRecurring.name,
+      amount: Number(newRecurring.amount) || 0,
+      paymentMethodId: newRecurring.paymentMethodId,
+      cardId: isCreditCard ? newRecurring.cardId : null,
+      category: newRecurring.category,
+      dayOfMonth: newRecurring.dayOfMonth,
+      memo: newRecurring.memo,
+      isActive: true,
+    };
+
+    try {
+      if (editingRecurringId) {
+        const existing = recurringTransactions.find((r) => r.id === editingRecurringId);
+        await setDoc(recurringTransactionDocRef(authUser.uid, editingRecurringId), { ...existing, ...data });
+      } else {
+        const id = `rec-${Date.now()}`;
+        await setDoc(recurringTransactionDocRef(authUser.uid, id), { ...data, createdAt: new Date().toISOString() });
+      }
+      handleCloseRecurringModal();
+    } catch (err) {
+      console.error(err);
+      alert('定期支出の保存に失敗しました。');
+    }
+  };
+
+  const handleDeleteRecurring = async (templateId) => {
+    if (!authUser) return;
+    if (confirm('この定期支出の登録を削除しますか？すでに記録された明細は残ります。')) {
+      try {
+        await deleteDoc(recurringTransactionDocRef(authUser.uid, templateId));
+      } catch (err) {
+        console.error(err);
+        alert('定期支出の削除に失敗しました。');
       }
     }
   };
@@ -3232,6 +3402,66 @@ export default function App() {
               )}
             </div>
 
+            {/* 定期支出（サブスクなど） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white">定期支出（サブスクなど）</h2>
+                  <p className="text-xs text-slate-400">1回登録すると、毎月自動で明細に記録されます</p>
+                </div>
+                <button
+                  onClick={handleOpenAddRecurring}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 transition-all shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>追加</span>
+                </button>
+              </div>
+              {recurringTransactions.length === 0 ? (
+                <p className="text-sm text-slate-500">登録されている定期支出はありません。</p>
+              ) : (
+                <div className="divide-y divide-slate-700/50">
+                  {recurringTransactions.map((template) => {
+                    const categoryObj = CATEGORIES.find((c) => c.id === template.category) || CATEGORIES[CATEGORIES.length - 1];
+                    const IconComponent = categoryObj.icon;
+                    const dayLabel = template.dayOfMonth === '末日' ? '末日' : `${template.dayOfMonth}日`;
+                    return (
+                      <div key={template.id} className="py-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className={`p-2.5 rounded-xl bg-slate-700 ${categoryObj.color.split(' ')[1]} shrink-0`}>
+                            <IconComponent className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-white text-sm truncate">{template.name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              毎月{dayLabel} ・ {getPaymentLabel(template)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-base font-bold text-white mr-1">¥{Number(template.amount).toLocaleString()}</span>
+                          <button
+                            onClick={() => handleOpenEditRecurring(template)}
+                            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-xl transition-colors"
+                            title="編集"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteRecurring(template.id)}
+                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
+                            title="削除"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* 支払いカレンダー */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
               <h2 className="text-lg font-bold text-white mb-4">支払いカレンダー（{formattedMonth}）</h2>
@@ -3652,6 +3882,137 @@ export default function App() {
                   className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm shadow-lg shadow-indigo-600/30"
                 >
                   {editingCardId ? '更新する' : '登録する'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5.5 モーダル: 定期支出（サブスクなど）の登録・編集 */}
+      {isRecurringModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <Repeat className="w-5 h-5 text-indigo-400" />
+                {editingRecurringId ? '定期支出を編集' : '定期支出を追加'}
+              </h3>
+              <button
+                onClick={handleCloseRecurringModal}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveRecurring} className="space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">名称</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="例: Netflix、Spotifyなど"
+                  value={newRecurring.name}
+                  onChange={(e) => setNewRecurring({ ...newRecurring, name: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">金額 (円)</label>
+                <input
+                  type="number"
+                  required
+                  placeholder="例: 1500"
+                  value={newRecurring.amount}
+                  onChange={(e) => setNewRecurring({ ...newRecurring, amount: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white font-bold text-lg focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">支払い方法</label>
+                <select
+                  value={newRecurring.paymentMethodId}
+                  onChange={(e) => setNewRecurring({ ...newRecurring, paymentMethodId: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                >
+                  {[...paymentMethods].filter((m) => m.isActive !== false).sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0)).map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {(paymentMethods.find((m) => m.id === newRecurring.paymentMethodId)?.type ?? 'credit_card') === 'credit_card' && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-2">カード</label>
+                  <select
+                    value={newRecurring.cardId}
+                    onChange={(e) => setNewRecurring({ ...newRecurring, cardId: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                  >
+                    {cards.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name} ({c.brand})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="min-w-0">
+                  <label className="block text-xs font-semibold text-slate-300 mb-2">毎月の支払日</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="例: 1, 27, 末日"
+                    value={newRecurring.dayOfMonth}
+                    onChange={(e) => setNewRecurring({ ...newRecurring, dayOfMonth: e.target.value })}
+                    className="w-full min-w-0 bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <label className="block text-xs font-semibold text-slate-300 mb-2">カテゴリ</label>
+                  <select
+                    value={newRecurring.category}
+                    onChange={(e) => setNewRecurring({ ...newRecurring, category: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                  >
+                    {CATEGORIES.map((cat) => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">メモ（任意）</label>
+                <input
+                  type="text"
+                  placeholder="例: 家族プラン"
+                  value={newRecurring.memo}
+                  onChange={(e) => setNewRecurring({ ...newRecurring, memo: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <p className="text-[11px] text-slate-500">
+                登録すると、設定した支払日が来るたびに自動で明細に記録されます（アプリを開いたときに、まだ記録されていない分がまとめて反映されます）。
+              </p>
+
+              <div className="pt-2 flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleCloseRecurringModal}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 font-medium text-sm hover:bg-slate-700/50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm shadow-lg shadow-indigo-600/30"
+                >
+                  {editingRecurringId ? '更新する' : '登録する'}
                 </button>
               </div>
             </form>

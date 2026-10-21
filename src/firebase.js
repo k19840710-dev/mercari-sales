@@ -56,6 +56,10 @@ export const pendingImportDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'us
 // 無効化できる拡張可能なマスタとして持つ（コードに固定実装しない）。
 export const getPaymentMethodsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'paymentMethods');
 export const paymentMethodDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'paymentMethods', id);
+// 定期支出（サブスクなど）のテンプレート。1回登録しておけば、アプリを開くたびに
+// まだ作られていない月の分の明細（transactions）を自動生成する。
+export const getRecurringTransactionsColRef = (uid) => collection(db, 'artifacts', APP_ID, 'users', uid, 'recurringTransactions');
+export const recurringTransactionDocRef = (uid, id) => doc(db, 'artifacts', APP_ID, 'users', uid, 'recurringTransactions', id);
 // Gmail自動取り込み（Apps Script）の実行状況。アプリ側は読み取り専用で表示するだけ。
 export const gmailImportStatusDocRef = (uid) => doc(db, 'artifacts', APP_ID, 'users', uid, 'settings', 'gmailImportStatus');
 
