@@ -2429,10 +2429,10 @@ export default function App() {
                 <div className="divide-y divide-slate-700/50">
                   {cardMonthlyStats.map((card) => (
                     <div key={card.id} className="py-2.5 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-sm text-slate-300 truncate">{card.name}</span>
+                      <div className="min-w-0">
+                        <span className="text-sm text-slate-300 truncate block">{card.name}</span>
                         {card.cycleEnd && (
-                          <span className="shrink-0 px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-400 text-[10px] font-medium">
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-400 text-[10px] font-medium">
                             {Number(card.cycleEnd.slice(5, 7))}/{Number(card.cycleEnd.slice(8, 10))}締め
                           </span>
                         )}
