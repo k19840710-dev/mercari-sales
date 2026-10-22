@@ -2388,12 +2388,12 @@ export default function App() {
           <div className="space-y-4 animate-fadeIn">
 
             {/* ① 今月の支出（最重要。先月比を添えて最も大きく表示） */}
-            <div className="bg-gradient-to-br from-indigo-600/25 to-purple-600/10 border border-indigo-500/30 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                <TrendingUp className="w-28 h-28 text-indigo-300" />
-              </div>
-              <p className="text-xs font-semibold text-indigo-300 uppercase tracking-wider">今月の支出</p>
-              <div className="mt-1 text-4xl sm:text-5xl font-extrabold text-white">
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+              <h2 className="text-base font-bold text-white flex items-center gap-2 mb-2">
+                <Wallet className="w-4 h-4 text-indigo-400" />
+                今月の支出
+              </h2>
+              <div className="text-4xl sm:text-5xl font-extrabold text-white">
                 ¥{totalMonthlyAmount.toLocaleString()}
               </div>
               {monthOverMonth ? (
@@ -2412,7 +2412,10 @@ export default function App() {
             {/* ② 支払予定（クレジットカードの直近の支払いをカレンダー形式で表示） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支払予定（クレジットカード）</p>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-indigo-400" />
+                  支払予定（クレジットカード）
+                </h2>
                 {upcomingPaymentDays.length > 3 && (
                   <button
                     onClick={() => setActiveTab('cards')}
