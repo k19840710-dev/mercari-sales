@@ -2388,9 +2388,9 @@ export default function App() {
           <div className="space-y-4 animate-fadeIn">
 
             {/* ① 今月の支出（最重要。先月比を添えて最も大きく表示） */}
-            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
+            <div className="bg-gradient-to-br from-indigo-600/25 to-purple-600/10 border border-indigo-500/30 rounded-2xl p-4 shadow-xl">
               <h2 className="text-base font-bold text-white flex items-center gap-2 mb-2">
-                <Wallet className="w-4 h-4 text-indigo-400" />
+                <Wallet className="w-4 h-4 text-indigo-300" />
                 今月の支出
               </h2>
               <div className="text-4xl sm:text-5xl font-extrabold text-white">
