@@ -1498,6 +1498,23 @@ export default function App() {
       .sort((a, b) => a.paymentDate - b.paymentDate);
   }, [cards, transactions]);
 
+  // ホームの「支払予定」をカレンダー風に日付でまとめたもの（今日以降、直近の日付のみ）。
+  // 同じ日に複数枚のカードの支払いが重なる場合、1日分としてまとめて表示する。
+  const upcomingPaymentDays = useMemo(() => {
+    const groups = [];
+    const map = new Map();
+    paymentSchedule.forEach(({ card, paymentDate, amount, daysUntil }) => {
+      const key = toDateKey(paymentDate);
+      if (!map.has(key)) {
+        const group = { key, paymentDate, daysUntil, items: [] };
+        map.set(key, group);
+        groups.push(group);
+      }
+      map.get(key).items.push({ card, amount });
+    });
+    return groups;
+  }, [paymentSchedule]);
+
   // 引落口座ごとの必要額（今月分・銀行口座を設定しているカードのみ）
   const bankAccountTotals = useMemo(() => {
     const today = new Date();
@@ -2392,11 +2409,11 @@ export default function App() {
               )}
             </div>
 
-            {/* ② 支払予定（クレジットカードの直近の支払いを複数枚表示） */}
+            {/* ② 支払予定（クレジットカードの直近の支払いをカレンダー形式で表示） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-4 shadow-xl">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-3">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">支払予定（クレジットカード）</p>
-                {paymentSchedule.length > 3 && (
+                {upcomingPaymentDays.length > 3 && (
                   <button
                     onClick={() => setActiveTab('cards')}
                     className="text-xs text-indigo-400 hover:text-indigo-300 font-medium shrink-0"
@@ -2405,22 +2422,29 @@ export default function App() {
                   </button>
                 )}
               </div>
-              {paymentSchedule.length === 0 ? (
+              {upcomingPaymentDays.length === 0 ? (
                 <p className="text-sm text-slate-500">予定なし（カードに締め日・支払日を設定してください）</p>
               ) : (
-                <div className="divide-y divide-slate-700/50">
-                  {paymentSchedule.slice(0, 3).map(({ card, paymentDate, amount, daysUntil }) => (
-                    <div key={card.id} className="py-2.5 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-white truncate">
-                          {paymentDate.getMonth() + 1}/{paymentDate.getDate()}
-                          <span className="ml-2 text-slate-300 font-normal">{card.name}</span>
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
+                <div className="space-y-4">
+                  {upcomingPaymentDays.slice(0, 3).map(({ key, paymentDate, daysUntil, items }) => (
+                    <div key={key} className="flex gap-4">
+                      <div className="w-12 shrink-0 text-center">
+                        <div className="text-lg font-bold text-white">{paymentDate.getDate()}</div>
+                        <div className="text-[10px] text-slate-500">
                           {daysUntil === 0 ? '今日' : `あと${daysUntil}日`}
                         </div>
                       </div>
-                      <span className="text-base font-bold text-white shrink-0">¥{amount.toLocaleString()}</span>
+                      <div className="flex-1 space-y-1.5 min-w-0">
+                        {items.map(({ card, amount }) => (
+                          <div
+                            key={card.id}
+                            className="flex items-center justify-between gap-3 bg-slate-900/50 rounded-xl px-3 py-2 min-w-0"
+                          >
+                            <span className="text-sm text-slate-200 truncate">{card.name}</span>
+                            <span className="text-sm font-bold text-white shrink-0">¥{amount.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
