@@ -329,6 +329,16 @@ const DEFAULT_PAYMENT_METHODS = [
   { id: 'pm-other', name: 'その他', type: 'other', icon: 'more-horizontal', displayOrder: 8, isActive: true },
 ];
 
+// 支払い方法の種類（type）ごとの表示ラベル。ユーザーが追加・編集する画面で使う。
+const PAYMENT_METHOD_TYPE_LABELS = {
+  credit_card: 'クレジットカード',
+  debit_card: 'デビットカード',
+  cash: '現金',
+  qr_payment: 'QRコード決済',
+  deferred_payment: '後払い',
+  other: 'その他',
+};
+
 function currentMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -724,11 +734,13 @@ export default function App() {
   const [isAddCardOpen, setIsAddCardOpen] = useState(false);
   const [isPendingReviewOpen, setIsPendingReviewOpen] = useState(false);
   const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
+  const [isPaymentMethodModalOpen, setIsPaymentMethodModalOpen] = useState(false);
 
   // 編集中のID（nullなら新規追加モード）
   const [editingTxId, setEditingTxId] = useState(null);
   const [editingCardId, setEditingCardId] = useState(null);
   const [editingRecurringId, setEditingRecurringId] = useState(null);
+  const [editingPaymentMethodId, setEditingPaymentMethodId] = useState(null);
   // 確認待ちの利用通知から「このカードを追加する」で開いた場合、そのカード保存後に
   // 続けて明細を作成し、確認待ちから消すために覚えておくID
   const [resolvingPendingId, setResolvingPendingId] = useState(null);
@@ -1076,6 +1088,12 @@ export default function App() {
     category: 'subscription',
     dayOfMonth: '1',
     memo: '',
+  });
+
+  // 新規支払い方法（デビットカード・現金など）フォームのステート
+  const [newPaymentMethod, setNewPaymentMethod] = useState({
+    name: '',
+    type: 'debit_card',
   });
 
   // カード番号・有効期限・セキュリティコードを表示中のカードID
@@ -1653,6 +1671,31 @@ export default function App() {
     resetNewRecurringForm();
   };
 
+  const resetNewPaymentMethodForm = () => {
+    setNewPaymentMethod({ name: '', type: 'debit_card' });
+  };
+
+  const handleCloseExtraPaymentMethodModal = () => {
+    setIsPaymentMethodModalOpen(false);
+    setEditingPaymentMethodId(null);
+    resetNewPaymentMethodForm();
+  };
+
+  const handleOpenAddPaymentMethod = () => {
+    resetNewPaymentMethodForm();
+    setEditingPaymentMethodId(null);
+    setIsPaymentMethodModalOpen(true);
+  };
+
+  const handleOpenEditPaymentMethod = (method) => {
+    setNewPaymentMethod({
+      name: method.name || '',
+      type: method.type || 'debit_card',
+    });
+    setEditingPaymentMethodId(method.id);
+    setIsPaymentMethodModalOpen(true);
+  };
+
   const handleOpenEditTransaction = (tx) => {
     // merchantフィールド追加前の明細は、店舗名がmemoに入っている。編集画面では
     // それを店舗名欄に出し、メモ欄は空にする（元々別々の情報ではなかったため）。
@@ -1961,6 +2004,48 @@ export default function App() {
       } catch (err) {
         console.error(err);
         alert('定期支出の削除に失敗しました。');
+      }
+    }
+  };
+
+  const handleSavePaymentMethod = async (e) => {
+    e.preventDefault();
+    if (!newPaymentMethod.name || !authUser) return;
+    if (editingPaymentMethodId === PAYMENT_METHOD_CREDIT_CARD_ID) return;
+
+    try {
+      if (editingPaymentMethodId) {
+        const existing = paymentMethods.find((m) => m.id === editingPaymentMethodId);
+        await setDoc(paymentMethodDocRef(authUser.uid, editingPaymentMethodId), {
+          ...existing,
+          name: newPaymentMethod.name,
+          type: newPaymentMethod.type,
+        });
+      } else {
+        const id = `pm-${Date.now()}`;
+        const maxOrder = paymentMethods.reduce((max, m) => Math.max(max, m.displayOrder ?? 0), 0);
+        await setDoc(paymentMethodDocRef(authUser.uid, id), {
+          name: newPaymentMethod.name,
+          type: newPaymentMethod.type,
+          displayOrder: maxOrder + 1,
+          isActive: true,
+        });
+      }
+      handleCloseExtraPaymentMethodModal();
+    } catch (err) {
+      console.error(err);
+      alert('支払い方法の保存に失敗しました。');
+    }
+  };
+
+  const handleDeletePaymentMethod = async (methodId) => {
+    if (!authUser || methodId === PAYMENT_METHOD_CREDIT_CARD_ID) return;
+    if (confirm('この支払い方法を削除しますか？すでに記録された明細は残ります。')) {
+      try {
+        await deleteDoc(paymentMethodDocRef(authUser.uid, methodId));
+      } catch (err) {
+        console.error(err);
+        alert('支払い方法の削除に失敗しました。');
       }
     }
   };
@@ -3391,6 +3476,63 @@ export default function App() {
               })}
             </div>
 
+            {/* その他の支払い方法（デビットカード・現金など） */}
+            <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white">支払い方法（デビットカード・現金など）</h2>
+                  <p className="text-xs text-slate-400">クレジットカード以外の支払い方法を追加できます</p>
+                </div>
+                <button
+                  onClick={handleOpenAddPaymentMethod}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium flex items-center gap-1.5 shadow-lg shadow-indigo-600/30 transition-all shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>追加</span>
+                </button>
+              </div>
+              {paymentMethods.filter((m) => m.id !== PAYMENT_METHOD_CREDIT_CARD_ID).length === 0 ? (
+                <p className="text-sm text-slate-500">登録されている支払い方法はありません。</p>
+              ) : (
+                <div className="divide-y divide-slate-700/50">
+                  {paymentMethods
+                    .filter((m) => m.id !== PAYMENT_METHOD_CREDIT_CARD_ID)
+                    .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
+                    .map((method) => (
+                      <div key={method.id} className="py-3 flex items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className="p-2.5 rounded-xl bg-slate-700 text-indigo-400 shrink-0">
+                            <Wallet className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-white text-sm truncate">{method.name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {PAYMENT_METHOD_TYPE_LABELS[method.type] || 'その他'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => handleOpenEditPaymentMethod(method)}
+                            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-xl transition-colors"
+                            title="編集"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeletePaymentMethod(method.id)}
+                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
+                            title="削除"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
             {/* 定期支出（サブスクなど） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
               <div className="flex justify-between items-center mb-4">
@@ -4002,6 +4144,71 @@ export default function App() {
                   className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm shadow-lg shadow-indigo-600/30"
                 >
                   {editingRecurringId ? '更新する' : '登録する'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 5.6 モーダル: 支払い方法（デビットカード・現金など）の登録・編集 */}
+      {isPaymentMethodModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl relative space-y-4 max-h-[88vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <h3 className="font-bold text-lg text-white flex items-center gap-2">
+                <Wallet className="w-5 h-5 text-indigo-400" />
+                {editingPaymentMethodId ? '支払い方法を編集' : '支払い方法を追加'}
+              </h3>
+              <button
+                onClick={handleCloseExtraPaymentMethodModal}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePaymentMethod} className="space-y-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">名称</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="例: 住信SBIネット銀行デビット"
+                  value={newPaymentMethod.name}
+                  onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, name: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">種類</label>
+                <select
+                  value={newPaymentMethod.type}
+                  onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, type: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-3 text-slate-200 text-sm focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="debit_card">デビットカード</option>
+                  <option value="cash">現金</option>
+                  <option value="qr_payment">QRコード決済</option>
+                  <option value="deferred_payment">後払い</option>
+                  <option value="other">その他</option>
+                </select>
+              </div>
+
+              <div className="pt-2 flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleCloseExtraPaymentMethodModal}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 font-medium text-sm hover:bg-slate-700/50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm shadow-lg shadow-indigo-600/30"
+                >
+                  {editingPaymentMethodId ? '更新する' : '登録する'}
                 </button>
               </div>
             </form>
