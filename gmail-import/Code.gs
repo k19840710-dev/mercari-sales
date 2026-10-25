@@ -46,7 +46,9 @@ const PROCESSED_LABEL_NAME = 'カード家計簿-取込済み';
 
 // アプリ側の支払い方法マスタ（paymentMethodsコレクション）で「クレジットカード」を
 // 表す固定id（src/App.jsxのPAYMENT_METHOD_CREDIT_CARD_IDと同じ値。変更不要）。
-// Gmail取込は常にクレジットカードの明細を扱うため、書き込む明細には常にこれを付ける。
+// クレジットカード（cardsコレクションと一致）として登録する明細にはこれを付ける。
+// デビットカード等（paymentMethodsコレクションの、type!=='credit_card'な支払い方法）
+// と一致した場合は、その支払い方法自身のidを使う（下のisDebitMode関連の処理を参照）。
 const PAYMENT_METHOD_CREDIT_CARD_ID = 'pm-credit-card';
 
 // AIモデル名。将来このモデルが使えなくなった場合は、Google AI Studio
@@ -94,6 +96,9 @@ function checkCardEmails() {
     // その明細として自動登録する（一致しなければ確認待ちへ）。
     const existingCards = getExistingCards_(accessToken);
     console.log(`登録済みカード: ${existingCards.map((c) => `${c.name}(下4桁:${c.last4 || '不明'})`).join('、') || '(なし)'}`);
+    // デビットカード等の突合用（デビット利用と判定できたメールだけ、こちらと突合する）。
+    const existingDebitMethods = getExistingDebitMethods_(accessToken);
+    console.log(`登録済み支払い方法（クレジットカード除く）: ${existingDebitMethods.map((m) => m.name).join('、') || '(なし)'}`);
 
     const query = `-label:"${PROCESSED_LABEL_NAME}" newer_than:7d`;
     const threads = GmailApp.search(query, 0, 50);
@@ -147,6 +152,7 @@ function checkCardEmails() {
               subject,
               body,
               existingCards,
+              existingDebitMethods,
             );
 
             if (decision.action === 'pending') {
@@ -173,11 +179,13 @@ function checkCardEmails() {
             }
 
             // ここに来るのは decision.action === 'register'（自動登録OK）の場合のみ。
-            // decision.card は、AIの抽出結果（カード番号下4桁 or カード名の完全一致）が
-            // 実際に登録済みのカードと一致した結果であり、新規作成されたものではない。
+            // decision.cardId / decision.paymentMethodId は、AIの抽出結果（カード番号
+            // 下4桁・カード名・支払い方法名の一致、またはデビット利用の判定）が実際に
+            // 登録済みのカード／支払い方法と一致した結果であり、新規作成されたものではない。
             const { issuerName } = extracted.data;
             const { merchant, amount, date, isRefund } = item;
-            const cardId = decision.card.id;
+            const cardId = decision.cardId;
+            const paymentMethodId = decision.paymentMethodId;
             // 返品・返金の通知は、家計簿上は支出のマイナス（入金）として扱う。
             // 見た目のUIや合計計算はamountの符号だけで判定するので、ここで符号を
             // 決めてしまえば以降のコードは通常の購入と同じロジックで良い。
@@ -187,7 +195,7 @@ function checkCardEmails() {
             // 店名なら正式名称＋カテゴリに寄せる（src/App.jsxのOCR取込と同じ表記に揃うので、
             // ここを優先する）。知らない店名だけ、AI自身が返した店名・カテゴリを使う。
             const known = findKnownMerchant_(merchant);
-            const finalName = known ? known.name : (merchant || issuerName || decision.card.name);
+            const finalName = known ? known.name : (merchant || issuerName || decision.name);
             const finalCategory = known ? known.category : (item.category || guessCategory_(merchant));
 
             // 同じ支払いについて、メルペイ経由の通知とEXIMBAY/PayPalのような決済代行
@@ -238,7 +246,7 @@ function checkCardEmails() {
                     merchant: patchMerchant,
                     memo: '',
                     gmailReceivedAt: patchReceivedAt,
-                    paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+                    paymentMethodId,
                     source: 'email',
                   }),
                 });
@@ -257,7 +265,7 @@ function checkCardEmails() {
               merchant: finalName,
               memo: '',
               gmailReceivedAt: new Date(messageTime).toISOString(),
-              paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID,
+              paymentMethodId,
               source: 'email',
             });
             importedCount += 1;
@@ -525,9 +533,22 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
 // 別フレーズなのでこの安全網には別途含めている）も通す必要がある。
 const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用(明細)?のお知らせ|利用速報|ご利用いただき|ご利用金額|カードのご利用|(の|で)(お)?支払いが?ありました|決済されました|決済が完了|お支払い(の)?確認|ショッピング利用|返金がありました|ご利用分の返金|返金いたしました|返金が完了)/;
 
+// 「三井住友カードOliveフレキシブルペイ」のように、同じ1枚の物理カードが
+// クレジットモード／デビットモードを切り替えて使える商品があり、通知メールの
+// 件名・カード会社名だけではどちらのモードの利用か判別できない（例: 件名は
+// どちらも「ご利用のお知らせ【三井住友カード】」）。本文の文言や送信元アドレス
+// （例: smbc-debit@smbc-card.com）に「デビット」特有の表現がある場合だけを
+// デビット利用として扱い、cardsコレクション（クレジットカード）ではなく
+// paymentMethodsコレクション（デビットカード等）との突合に回す。
+// ここで検出できなければ、これまで通りクレジットカードとして扱われる
+// （デビットかどうか分からない場合に誤ってクレジット明細として自動登録して
+// しまう方が、確認待ちに回すより悪いため、判定はAIではなくこの固定パターンで
+// 保守的に行う）。
+const DEBIT_MODE_PATTERN = /(デビットモード|デビット払い|デビットでのご利用|デビットカードご利用|デビット決済)/;
+
 /**
- * AIの抽出結果・本文の文言・登録済みカード一覧から、「自動登録してよいか／
- * 確認待ちに回すか」を判定する（is_purchase_notification=falseの完全な
+ * AIの抽出結果・本文の文言・登録済みカード/支払い方法一覧から、「自動登録して
+ * よいか／確認待ちに回すか」を判定する（is_purchase_notification=falseの完全な
  * スキップは、この関数を呼ぶ前に checkCardEmails 側で処理済み）。
  * 登録するかどうかの最終判断はAIではなく、必ずこの関数（＝コード側）が行う。
  *
@@ -535,17 +556,49 @@ const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用(明細)?の
  *  - AIの確信度が high
  *  - 金額・日付・利用先・カード番号下4桁のうち複数（3つ以上）が確認できる
  *  - 本文に「ご利用」等の利用通知特有の文言がある
- *  - カード番号下4桁、またはカード名が、登録済みのカードと完全に一致する
- *    （一致しなければ絶対に新しいカードを作らない）
+ *  - DEBIT_MODE_PATTERN等でデビット利用と判定できた場合は、登録済みの
+ *    支払い方法（デビットカード等）と名前が一致する（一致しなければ、
+ *    似た名前のクレジットカードに誤って紐付けたりはせず確認待ちにする）
+ *  - デビット利用と判定できなかった場合は、カード番号下4桁またはカード名が
+ *    登録済みのクレジットカードと完全に一致する
+ *    （どちらのケースも、一致しなければ絶対に新しいカード・支払い方法を作らない）
  * 1つでも満たさなければ pending（確認待ち）。
  */
-function evaluateForImport_(extracted, subject, body, existingCards) {
+function evaluateForImport_(extracted, subject, body, existingCards, existingDebitMethods) {
   const { confidence, issuerName, last4, merchant, amount, date } = extracted;
 
   const hasUsagePhrase = USAGE_PHRASE_PATTERN.test(`${subject}\n${body}`);
   const signalsPresent = [amount, date, merchant, last4].filter((v) => v !== null && v !== undefined && v !== '').length;
   const requiredFieldsOk = !!amount && !!date && signalsPresent >= 3 && hasUsagePhrase;
   const confidenceOk = confidence === 'high';
+  const isDebitMode = DEBIT_MODE_PATTERN.test(`${subject}\n${body}`);
+
+  const reasons = [];
+  if (!requiredFieldsOk) reasons.push('金額・日付・利用先・カード番号などの情報が十分に確認できませんでした');
+  if (!confidenceOk) reasons.push('AIの確信度が十分ではありません');
+
+  if (isDebitMode) {
+    // デビット利用は、同じ1枚のカードがクレジット/デビット両モードを持つ商品
+    // （例: 三井住友カードOliveフレキシブルペイ）があるため、カード番号下4桁が
+    // 本文に書かれないことが多い。名前の一致（部分一致を含む）だけで突合する。
+    let matchedMethod = null;
+    if (issuerName) {
+      const normalizedIssuer = toComparableText_(issuerName);
+      matchedMethod = existingDebitMethods.find((m) => {
+        const normalizedName = toComparableText_(m.name);
+        return normalizedName === normalizedIssuer
+          || normalizedName.includes(normalizedIssuer)
+          || normalizedIssuer.includes(normalizedName);
+      }) || null;
+    }
+    if (!matchedMethod) {
+      reasons.push('デビット利用とみられますが、一致する登録済みの支払い方法（デビットカード等）が見つかりません');
+    }
+    if (reasons.length === 0) {
+      return { action: 'register', isDebit: true, cardId: null, paymentMethodId: matchedMethod.id, name: matchedMethod.name };
+    }
+    return { action: 'pending', reason: reasons.join('。') };
+  }
 
   // last4が'0000'などのプレースホルダーのカード（アプリ側でカード番号未入力のまま
   // 登録した場合の初期値）は、誤って一致してしまわないよう突合の対象から除く。
@@ -558,16 +611,12 @@ function evaluateForImport_(extracted, subject, body, existingCards) {
     const normalizedIssuer = toComparableText_(issuerName);
     matchedCard = existingCards.find((c) => toComparableText_(c.name) === normalizedIssuer) || null;
   }
-
-  const reasons = [];
-  if (!requiredFieldsOk) reasons.push('金額・日付・利用先・カード番号などの情報が十分に確認できませんでした');
-  if (!confidenceOk) reasons.push('AIの確信度が十分ではありません');
   if (!matchedCard) {
     reasons.push(last4 ? `末尾4桁「${last4}」に一致する登録済みカードが見つかりません` : '登録済みカードのどれと一致するか判断できません');
   }
 
   if (reasons.length === 0) {
-    return { action: 'register', card: matchedCard };
+    return { action: 'register', isDebit: false, cardId: matchedCard.id, paymentMethodId: PAYMENT_METHOD_CREDIT_CARD_ID, name: matchedCard.name };
   }
   return { action: 'pending', reason: reasons.join('。') };
 }
@@ -854,6 +903,37 @@ function getExistingCards_(accessToken) {
       .filter((c) => c.name);
   } catch (e) {
     console.warn('カード一覧の取得に失敗しました（すべて確認待ちになります）: ' + e);
+    return [];
+  }
+}
+
+/**
+ * 登録済みの支払い方法（デビットカード・現金・QRコード決済等。クレジット
+ * カードを除く）を { id, name } の配列で取得する。デビット利用メールの突合に
+ * だけ使う（取得に失敗しても空配列にして続行 ―― その場合はデビット利用が
+ * 全部確認待ちに回るだけで、誤登録が起きるわけではない）。
+ */
+function getExistingDebitMethods_(accessToken) {
+  try {
+    const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'paymentMethods');
+    const options = { method: 'get', headers: { Authorization: 'Bearer ' + accessToken }, muteHttpExceptions: true };
+    const response = UrlFetchApp.fetch(url, options);
+    if (response.getResponseCode() >= 300) return [];
+    const data = JSON.parse(response.getContentText() || '{}');
+    const docs = data.documents || [];
+    return docs
+      .map((d) => {
+        const fields = d.fields || {};
+        return {
+          id: d.name.split('/').pop(),
+          name: (fields.name && fields.name.stringValue) || '',
+          type: (fields.type && fields.type.stringValue) || '',
+          isActive: fields.isActive ? !!fields.isActive.booleanValue : true,
+        };
+      })
+      .filter((m) => m.name && m.type !== 'credit_card' && m.isActive !== false);
+  } catch (e) {
+    console.warn('支払い方法一覧の取得に失敗しました（デビット利用はすべて確認待ちになります）: ' + e);
     return [];
   }
 }
