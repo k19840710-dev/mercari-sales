@@ -100,8 +100,22 @@ function checkCardEmails() {
     const existingDebitMethods = getExistingDebitMethods_(accessToken);
     console.log(`登録済み支払い方法（クレジットカード除く）: ${existingDebitMethods.map((m) => m.name).join('、') || '(なし)'}`);
 
-    const query = `-label:"${PROCESSED_LABEL_NAME}" newer_than:7d`;
-    const threads = GmailApp.search(query, 0, 50);
+    // 既に判定済みのメッセージID一覧（メッセージ単位の重複防止。詳しくは
+    // getProcessedMessageIds_ のコメントを参照）。
+    const processedMessageIds = getProcessedMessageIds_(accessToken);
+    let processedMessageIdsChanged = false;
+
+    // Gmailのラベルはスレッド単位にしか付けられない。もし「ご利用のお知らせ」の
+    // ように同じ件名のメールが同じスレッドにまとまってしまうと、スレッドに
+    // ラベルを付けた後でそのスレッドに届いた新しいメールが -label の除外条件で
+    // 永久に検索対象から外れてしまう（実際に三井住友カードの通知で起きた不具合）。
+    // そのため検索では label による除外をせず、処理済みかどうかはメッセージID
+    // 単位で processedMessageIds を見て判定する。ラベル自体はGmail上で見分け
+    // やすくするための目印として引き続き付ける。
+    // ラベル除外をやめたことで対象スレッド数が増えるため、見逃しを避けるために
+    // 取得上限も少し広げておく（Gmail側の取得自体は軽い操作のため問題ない）。
+    const query = `newer_than:7d`;
+    const threads = GmailApp.search(query, 0, 100);
     console.log(`検索クエリ: ${query}`);
     console.log(`検索結果: ${threads.length}件のスレッド`);
 
@@ -119,6 +133,11 @@ function checkCardEmails() {
           return;
         }
 
+        const messageId = message.getId();
+        if (processedMessageIds[messageId]) {
+          return; // 既にこのメッセージは判定済み（AI呼び出し・課金の無駄撃ちを避ける）
+        }
+
         const subject = message.getSubject() || '';
         try {
           const body = message.getPlainBody();
@@ -130,6 +149,8 @@ function checkCardEmails() {
 
           if (extracted.status === 'not_purchase') {
             console.log(`AI判定: 利用確定通知ではない → スキップ: "${subject}"`);
+            processedMessageIds[messageId] = Date.now();
+            processedMessageIdsChanged = true;
             return; // このメール自体は「処理済み」として扱ってよい（threadHadFailureにはしない）
           }
           if (extracted.status === 'error') {
@@ -137,6 +158,12 @@ function checkCardEmails() {
             threadHadFailure = true; // 次回また拾い直す
             return;
           }
+
+          // ここまで来たらAIの抽出自体は成功している。これ以降は登録 or 確認待ちへの
+          // 振り分けなので、このメッセージ自体は「判定済み」として記録してよい
+          // （再実行してもGemini呼び出しをスキップできるようにするため）。
+          processedMessageIds[messageId] = Date.now();
+          processedMessageIdsChanged = true;
 
           const messageDate = message.getDate();
           const messageTime = messageDate.getTime();
@@ -278,11 +305,23 @@ function checkCardEmails() {
       });
 
       // スレッド内の全メールがAI判定含めて処理できた場合だけ「処理済み」にする。
-      // エラーが混ざっていたら次回また対象にして再挑戦させる。
+      // エラーが混ざっていたら次回また対象にして再挑戦させる。このラベルはもう
+      // 検索の除外条件には使っていない（Gmail上で見分けやすくするための目印）。
       if (!threadHadFailure) {
         thread.addLabel(label);
       }
     });
+
+    if (processedMessageIdsChanged) {
+      // 検索窓（newer_than:7d）より古いメッセージの記録はもう不要なので、
+      // 保存先が際限なく膨らまないよう余裕を持って10日より古いものは捨てる。
+      const cutoff = Date.now() - 10 * 24 * 60 * 60 * 1000;
+      const pruned = {};
+      Object.keys(processedMessageIds).forEach((id) => {
+        if (processedMessageIds[id] >= cutoff) pruned[id] = processedMessageIds[id];
+      });
+      saveProcessedMessageIds_(accessToken, pruned);
+    }
 
     updateStatus_(accessToken, {
       lastCheckedAt: startedAt.toISOString(),
@@ -962,6 +1001,44 @@ function upsertPendingImport_(accessToken, id, data) {
 function updateStatus_(accessToken, status) {
   const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'settings', 'gmailImportStatus');
   firestoreRequest_(accessToken, 'patch', url, { fields: toFirestoreFields_(status) });
+}
+
+/**
+ * 既に判定済みの（これ以上Geminiに掛ける必要が無い）GmailメッセージIDの一覧を
+ * { messageId: 判定した時刻(ms) } の形で取得する。
+ *
+ * Gmailのラベルはスレッド単位にしか付けられないため、以前は「スレッドに
+ * ラベルが付いているか」で除外していたが、それだと同じスレッドに新しい
+ * メールが届いた時に永久に見逃してしまう不具合があった（三井住友カードの
+ * ように毎回同じ件名の通知が同じスレッドにまとまりやすいカード会社で実際に
+ * 発生）。そのためメッセージID単位でこのFirestoreドキュメントに記録し、
+ * 判定が必要かどうかをメッセージ単位で判断するようにしている。
+ * 取得に失敗した場合は空オブジェクトを返す（その回はAI呼び出しが増えるだけで、
+ * 誤登録にはつながらない）。
+ */
+function getProcessedMessageIds_(accessToken) {
+  try {
+    const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'settings', 'gmailProcessedMessages');
+    const options = { method: 'get', headers: { Authorization: 'Bearer ' + accessToken }, muteHttpExceptions: true };
+    const response = UrlFetchApp.fetch(url, options);
+    if (response.getResponseCode() >= 300) return {};
+    const data = JSON.parse(response.getContentText() || '{}');
+    const raw = (data.fields && data.fields.data && data.fields.data.stringValue) || '{}';
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (e) {
+    console.warn('処理済みメッセージIDの取得に失敗しました（今回は全件AIで再判定します）: ' + e);
+    return {};
+  }
+}
+
+function saveProcessedMessageIds_(accessToken, map) {
+  try {
+    const url = firestoreDocPath_('artifacts', FIRESTORE_APP_ID, 'users', FIRESTORE_USER_ID, 'settings', 'gmailProcessedMessages');
+    firestoreRequest_(accessToken, 'patch', url, { fields: toFirestoreFields_({ data: JSON.stringify(map) }) });
+  } catch (e) {
+    console.warn('処理済みメッセージIDの保存に失敗しました（次回は一部AIで再判定されます）: ' + e);
+  }
 }
 
 // ============================================================
