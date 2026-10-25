@@ -1849,6 +1849,7 @@ export default function App() {
     if (confirm('この利用明細を削除しますか？')) {
       try {
         await deleteDoc(transactionDocRef(authUser.uid, id));
+        handleCloseTransactionModal();
       } catch (err) {
         console.error(err);
         alert('明細の削除に失敗しました。');
@@ -2910,7 +2911,10 @@ export default function App() {
                     return (
                       <div
                         key={tx.id}
-                        className="p-4 hover:bg-slate-700/30 transition-colors flex items-center justify-between gap-3"
+                        onClick={() => handleOpenEditTransaction(tx)}
+                        role="button"
+                        tabIndex={0}
+                        className="p-4 hover:bg-slate-700/30 transition-colors flex items-center justify-between gap-3 cursor-pointer"
                       >
                         <div className="flex items-center space-x-3.5 min-w-0">
                           <div className={`p-2.5 rounded-xl bg-slate-700 ${categoryObj.color.split(' ')[1]} shrink-0`}>
@@ -2930,24 +2934,11 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="flex items-center space-x-3 shrink-0">
+                        <div className="flex items-center space-x-2 shrink-0">
                           <span className={`font-bold text-base sm:text-lg ${tx.amount < 0 ? 'text-emerald-400' : 'text-white'}`}>
                             {formatSignedYen(tx.amount)}
                           </span>
-                          <button
-                            onClick={() => handleOpenEditTransaction(tx)}
-                            className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-lg transition-colors"
-                            title="編集"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteTransaction(tx.id)}
-                            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-lg transition-colors"
-                            title="削除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <ChevronRight className="w-4 h-4 text-slate-500" />
                         </div>
                       </div>
                     );
@@ -3840,6 +3831,15 @@ export default function App() {
                   {editingTxId ? '更新する' : '保存する'}
                 </button>
               </div>
+              {editingTxId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteTransaction(editingTxId)}
+                  className="w-full py-2.5 rounded-xl border border-red-900/50 text-red-400 font-medium text-sm hover:bg-red-950/30 transition-colors"
+                >
+                  この明細を削除する
+                </button>
+              )}
             </form>
           </div>
         </div>
