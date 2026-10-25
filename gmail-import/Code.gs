@@ -123,7 +123,7 @@ function checkCardEmails() {
         try {
           const body = message.getPlainBody();
           // AIの役割は抽出だけ。登録してよいかどうかは evaluateForImport_ が判断する。
-          const extracted = extractEmailInfo_(geminiKey, subject, body, existingCards, message.getDate());
+          const extracted = extractEmailInfo_(geminiKey, subject, body, existingCards, existingDebitMethods, message.getDate());
           // 無料枠のレート制限（1分あたり◯リクエスト）に極力引っかからないよう、
           // 判定1回ごとに少し間隔を空ける。
           Utilities.sleep(3200);
@@ -359,19 +359,31 @@ function fetchGeminiWithRetry_(url, payload, attempt) {
  * 判断は一切しない（evaluateForImport_ に分離している）。
  * 戻り値: { status: 'ok', data: {...} } / { status: 'not_purchase' } / { status: 'error', error }
  */
-function extractEmailInfo_(apiKey, subject, body, existingCards, messageDate) {
+function extractEmailInfo_(apiKey, subject, body, existingCards, existingDebitMethods, messageDate) {
   const truncatedBody = String(body || '').slice(0, 4000);
   const currentYear = (messageDate instanceof Date) ? messageDate.getFullYear() : new Date().getFullYear();
 
-  const cardHint = (existingCards && existingCards.length)
+  // 「三井住友カードOliveフレキシブルペイ」のように、本文中のブランド名（Olive）と
+  // メールの件名のカード会社名（三井住友カード）が異なる商品がある。ユーザーが
+  // デビットカードを「Oliveカード」のような、件名のカード会社名とは別の名前で
+  // 登録していることがあるため、既存カードだけでなく既存の支払い方法（デビット
+  // カード等）もヒントとして渡し、AIに本文中の表記から適切な方を選ばせる。
+  const knownEntities = [
+    ...(existingCards || []).map((c) => `- ${c.name}${c.last4 ? `（下4桁: ${c.last4}）` : ''}`),
+    ...(existingDebitMethods || []).map((m) => `- ${m.name}`),
+  ];
+  const cardHint = knownEntities.length
     ? [
       '',
-      '参考: すでに登録されているカード（このメールがどれと一致するかはシステム側で',
-      '別途判定するので、ここでは参考情報として使ってください）:',
-      existingCards.map((c) => `- ${c.name}${c.last4 ? `（下4桁: ${c.last4}）` : ''}`).join('\n'),
+      '参考: すでに登録されているカード・支払い方法（このメールがどれと一致するかは',
+      'システム側で別途判定するので、ここでは参考情報として使ってください）:',
+      knownEntities.join('\n'),
       'このメールの決済が、上のどれかと実体として同じカード・決済アカウントであれば',
       '（例えば同じ○○ペイのアカウントから、メルカード決済・iD決済・バーチャルカード決済など',
-      '複数の見た目で通知が来ている場合は全部同じ実体）、issuer_nameは必ずその登録済みの',
+      '複数の見た目で通知が来ている場合は全部同じ実体。また、件名のカード会社名と本文の',
+      'ブランド名が異なる場合もある。例えば件名が「三井住友カード」でも、本文に',
+      '「Oliveフレキシブルペイ」とあり、登録済みの名前が「Oliveカード」であれば、',
+      'それは同じカードを指している）、issuer_nameは必ずその登録済みの',
       '名前をそのまま（一字一句）使ってください。どれとも異なる場合は、メールに書かれている',
       'カード会社・決済サービス名をそのまま抽出してください（新しいカードを作る必要はありません）。',
     ].join('\n')
