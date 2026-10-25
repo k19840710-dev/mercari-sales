@@ -1970,6 +1970,7 @@ export default function App() {
           .filter((t) => t.cardId === cardId)
           .forEach((t) => batch.delete(transactionDocRef(authUser.uid, t.id)));
         await batch.commit();
+        handleCloseCardModal();
       } catch (err) {
         console.error(err);
         alert('カードの削除に失敗しました。');
@@ -2013,6 +2014,7 @@ export default function App() {
     if (confirm('この定期支出の登録を削除しますか？すでに記録された明細は残ります。')) {
       try {
         await deleteDoc(recurringTransactionDocRef(authUser.uid, templateId));
+        handleCloseRecurringModal();
       } catch (err) {
         console.error(err);
         alert('定期支出の削除に失敗しました。');
@@ -2055,6 +2057,7 @@ export default function App() {
     if (confirm('この支払い方法を削除しますか？すでに記録された明細は残ります。')) {
       try {
         await deleteDoc(paymentMethodDocRef(authUser.uid, methodId));
+        handleCloseExtraPaymentMethodModal();
       } catch (err) {
         console.error(err);
         alert('支払い方法の削除に失敗しました。');
@@ -2529,8 +2532,10 @@ export default function App() {
                   {upcomingPaymentDays.slice(0, 3).map(({ key, paymentDate, daysUntil, items }) => (
                     <div key={key} className="flex gap-4">
                       <div className="w-12 shrink-0 text-center">
-                        <div className="text-[10px] text-slate-500">{paymentDate.getMonth() + 1}月</div>
-                        <div className="text-lg font-bold text-white -mt-0.5">{paymentDate.getDate()}</div>
+                        <div className="flex items-baseline justify-center gap-0.5">
+                          <span className="text-[10px] text-slate-500">{paymentDate.getMonth() + 1}月</span>
+                          <span className="text-lg font-bold text-white">{paymentDate.getDate()}</span>
+                        </div>
                         <div className="text-[10px] text-slate-500">
                           {daysUntil === 0 ? '今日' : `あと${daysUntil}日`}
                         </div>
@@ -3354,14 +3359,6 @@ export default function App() {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCard(card.id)}
-                          className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
-                          title="カード削除"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </div>
                     </div>
 
@@ -3515,10 +3512,10 @@ export default function App() {
 
             {/* その他の支払い方法（デビットカード・現金など） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-start mb-4">
                 <div>
                   <h2 className="text-lg font-bold text-white">支払い方法</h2>
-                  <p className="text-xs text-slate-400">クレジットカード以外の支払い方法（デビットカード・現金など）を追加できます</p>
+                  <p className="text-xs text-slate-400">デビットカード・現金などを追加できます</p>
                 </div>
                 <button
                   onClick={handleOpenAddPaymentMethod}
@@ -3536,7 +3533,13 @@ export default function App() {
                     .filter((m) => m.id !== PAYMENT_METHOD_CREDIT_CARD_ID)
                     .sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0))
                     .map((method) => (
-                      <div key={method.id} className="py-3 flex items-center justify-between gap-3">
+                      <div
+                        key={method.id}
+                        onClick={() => handleOpenEditPaymentMethod(method)}
+                        role="button"
+                        tabIndex={0}
+                        className="py-3 flex items-center justify-between gap-3 -mx-5 px-5 cursor-pointer hover:bg-slate-700/30 transition-colors"
+                      >
                         <div className="flex items-center space-x-3 min-w-0">
                           <div className="p-2.5 rounded-xl bg-slate-700 text-indigo-400 shrink-0">
                             <Wallet className="w-5 h-5" />
@@ -3548,22 +3551,7 @@ export default function App() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => handleOpenEditPaymentMethod(method)}
-                            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-xl transition-colors"
-                            title="編集"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeletePaymentMethod(method.id)}
-                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
-                            title="削除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
                       </div>
                     ))}
                 </div>
@@ -3594,7 +3582,13 @@ export default function App() {
                     const IconComponent = categoryObj.icon;
                     const dayLabel = template.dayOfMonth === '末日' ? '末日' : `${template.dayOfMonth}日`;
                     return (
-                      <div key={template.id} className="py-3 flex items-center justify-between gap-3">
+                      <div
+                        key={template.id}
+                        onClick={() => handleOpenEditRecurring(template)}
+                        role="button"
+                        tabIndex={0}
+                        className="py-3 flex items-center justify-between gap-3 -mx-5 px-5 cursor-pointer hover:bg-slate-700/30 transition-colors"
+                      >
                         <div className="flex items-center space-x-3 min-w-0">
                           <div className={`p-2.5 rounded-xl bg-slate-700 ${categoryObj.color.split(' ')[1]} shrink-0`}>
                             <IconComponent className="w-5 h-5" />
@@ -3606,22 +3600,9 @@ export default function App() {
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-base font-bold text-white mr-1">¥{Number(template.amount).toLocaleString()}</span>
-                          <button
-                            onClick={() => handleOpenEditRecurring(template)}
-                            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-xl transition-colors"
-                            title="編集"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteRecurring(template.id)}
-                            className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
-                            title="削除"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-base font-bold text-white">¥{Number(template.amount).toLocaleString()}</span>
+                          <ChevronRight className="w-4 h-4 text-slate-500" />
                         </div>
                       </div>
                     );
@@ -4052,6 +4033,15 @@ export default function App() {
                   {editingCardId ? '更新する' : '登録する'}
                 </button>
               </div>
+              {editingCardId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCard(editingCardId)}
+                  className="w-full py-2.5 rounded-xl border border-red-900/50 text-red-400 font-medium text-sm hover:bg-red-950/30 transition-colors"
+                >
+                  このカードを削除する
+                </button>
+              )}
             </form>
           </div>
         </div>
@@ -4183,6 +4173,15 @@ export default function App() {
                   {editingRecurringId ? '更新する' : '登録する'}
                 </button>
               </div>
+              {editingRecurringId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteRecurring(editingRecurringId)}
+                  className="w-full py-2.5 rounded-xl border border-red-900/50 text-red-400 font-medium text-sm hover:bg-red-950/30 transition-colors"
+                >
+                  この定期支出を削除する
+                </button>
+              )}
             </form>
           </div>
         </div>
@@ -4248,6 +4247,15 @@ export default function App() {
                   {editingPaymentMethodId ? '更新する' : '登録する'}
                 </button>
               </div>
+              {editingPaymentMethodId && (
+                <button
+                  type="button"
+                  onClick={() => handleDeletePaymentMethod(editingPaymentMethodId)}
+                  className="w-full py-2.5 rounded-xl border border-red-900/50 text-red-400 font-medium text-sm hover:bg-red-950/30 transition-colors"
+                >
+                  この支払い方法を削除する
+                </button>
+              )}
             </form>
           </div>
         </div>
