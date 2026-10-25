@@ -2490,11 +2490,8 @@ export default function App() {
                 <Wallet className="w-4 h-4 text-indigo-300" />
                 今月の支出
               </h2>
-              <div className="flex items-baseline gap-2 flex-wrap">
-                <div className="text-4xl sm:text-5xl font-extrabold text-white">
-                  ¥{totalMonthlyAmount.toLocaleString()}
-                </div>
-                <span className="text-sm text-indigo-200/70">{formattedMonth}</span>
+              <div className="text-4xl sm:text-5xl font-extrabold text-white">
+                ¥{totalMonthlyAmount.toLocaleString()}
               </div>
               {monthOverMonth ? (
                 <p className={`mt-3 text-sm font-semibold ${monthOverMonth.diff > 0 ? 'text-rose-400' : monthOverMonth.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
@@ -2532,7 +2529,8 @@ export default function App() {
                   {upcomingPaymentDays.slice(0, 3).map(({ key, paymentDate, daysUntil, items }) => (
                     <div key={key} className="flex gap-4">
                       <div className="w-12 shrink-0 text-center">
-                        <div className="text-lg font-bold text-white">{paymentDate.getDate()}</div>
+                        <div className="text-[10px] text-slate-500">{paymentDate.getMonth() + 1}月</div>
+                        <div className="text-lg font-bold text-white -mt-0.5">{paymentDate.getDate()}</div>
                         <div className="text-[10px] text-slate-500">
                           {daysUntil === 0 ? '今日' : `あと${daysUntil}日`}
                         </div>
@@ -3519,8 +3517,8 @@ export default function App() {
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
               <div className="flex justify-between items-center mb-4">
                 <div>
-                  <h2 className="text-lg font-bold text-white">支払い方法（デビットカード・現金など）</h2>
-                  <p className="text-xs text-slate-400">クレジットカード以外の支払い方法を追加できます</p>
+                  <h2 className="text-lg font-bold text-white">支払い方法</h2>
+                  <p className="text-xs text-slate-400">クレジットカード以外の支払い方法（デビットカード・現金など）を追加できます</p>
                 </div>
                 <button
                   onClick={handleOpenAddPaymentMethod}
