@@ -2533,7 +2533,7 @@ export default function App() {
                     <div key={key} className="flex gap-4">
                       <div className="w-12 shrink-0 text-center">
                         <div className="flex items-baseline justify-center gap-0.5">
-                          <span className="text-[10px] text-slate-500">{paymentDate.getMonth() + 1}月</span>
+                          <span className="text-[10px] text-slate-500">{paymentDate.getMonth() + 1}/</span>
                           <span className="text-lg font-bold text-white">{paymentDate.getDate()}</span>
                         </div>
                         <div className="text-[10px] text-slate-500">
@@ -3560,7 +3560,7 @@ export default function App() {
 
             {/* 定期支出（サブスクなど） */}
             <div className="bg-slate-800/90 border border-slate-700/60 rounded-2xl p-5 shadow-xl">
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-start mb-4">
                 <div>
                   <h2 className="text-lg font-bold text-white">定期支出（サブスクなど）</h2>
                   <p className="text-xs text-slate-400">1回登録すると、毎月自動で明細に記録されます</p>
