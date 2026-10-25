@@ -1048,8 +1048,8 @@ function saveProcessedMessageIds_(accessToken, map) {
 // 実行する時は、上のプルダウンで checkCardEmails ではなく debugSearch を選ぶこと。
 // ============================================================
 function debugSearch() {
-  const query = `-label:"${PROCESSED_LABEL_NAME}" newer_than:7d`;
-  const threads = GmailApp.search(query, 0, 50);
+  const query = `newer_than:7d`;
+  const threads = GmailApp.search(query, 0, 100);
   console.log(`検索クエリ: ${query}`);
   console.log(`対象スレッド数: ${threads.length}件`);
   threads.forEach((thread) => {
