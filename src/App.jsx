@@ -1107,6 +1107,18 @@ export default function App() {
     });
   };
 
+  // カード一覧で「詳細（カード番号・口座・年間累計など）」を展開表示中のカードID。
+  // 登録枚数が増えても一覧が縦に伸びすぎないよう、デフォルトは折りたたみ。
+  const [expandedCards, setExpandedCards] = useState(() => new Set());
+  const toggleCardExpanded = (cardId) => {
+    setExpandedCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
+    });
+  };
+
   // カード番号・有効期限・セキュリティコードのコピーボタン用
   const [copiedField, setCopiedField] = useState(null);
   const handleCopyToClipboard = async (text, key) => {
@@ -2478,8 +2490,11 @@ export default function App() {
                 <Wallet className="w-4 h-4 text-indigo-300" />
                 今月の支出
               </h2>
-              <div className="text-4xl sm:text-5xl font-extrabold text-white">
-                ¥{totalMonthlyAmount.toLocaleString()}
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <div className="text-4xl sm:text-5xl font-extrabold text-white">
+                  ¥{totalMonthlyAmount.toLocaleString()}
+                </div>
+                <span className="text-sm text-indigo-200/70">{formattedMonth}</span>
               </div>
               {monthOverMonth ? (
                 <p className={`mt-3 text-sm font-semibold ${monthOverMonth.diff > 0 ? 'text-rose-400' : monthOverMonth.diff < 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
@@ -3308,6 +3323,7 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {cards.map((card) => {
                 const theme = CARD_THEMES[card.theme] || CARD_THEMES.purple;
+                const isExpanded = expandedCards.has(card.id);
                 return (
                   <div
                     key={card.id}
@@ -3315,17 +3331,25 @@ export default function App() {
                   >
                     {/* カード上部表示 */}
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center space-x-3">
-                        <div className={`p-3 rounded-xl ${theme.bg} shadow-md`}>
+                      <button
+                        type="button"
+                        onClick={() => toggleCardExpanded(card.id)}
+                        className="flex items-center space-x-3 min-w-0 text-left"
+                      >
+                        <div className={`p-3 rounded-xl ${theme.bg} shadow-md shrink-0`}>
                           <CreditCard className="w-6 h-6 text-white" />
                         </div>
-                        <div>
-                          <h3 className="font-bold text-white text-base">{card.name}</h3>
+                        <div className="min-w-0">
+                          <h3 className="font-bold text-white text-base truncate">{card.name}</h3>
                           <p className="text-xs text-slate-400">{card.brand} •••• {card.last4}</p>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1">
+                        <ChevronDown
+                          className={`w-4 h-4 text-slate-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
                         <button
+                          type="button"
                           onClick={() => handleOpenEditCard(card)}
                           className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-700 rounded-xl transition-colors"
                           title="カード情報を編集"
@@ -3333,6 +3357,7 @@ export default function App() {
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleDeleteCard(card.id)}
                           className="p-2 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-xl transition-colors"
                           title="カード削除"
@@ -3342,102 +3367,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* カード番号・有効期限・セキュリティコード・名義 */}
-                    <div className="bg-slate-900/50 p-3.5 rounded-xl border border-slate-700/40 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5" />
-                          {card.holderName || '名義未登録'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => toggleCardReveal(card.id)}
-                          className="flex items-center gap-1 text-[11px] font-medium text-indigo-400 hover:text-indigo-300"
-                        >
-                          {revealedCards.has(card.id) ? (
-                            <>
-                              <EyeOff className="w-3.5 h-3.5" /> 隠す
-                            </>
-                          ) : (
-                            <>
-                              <Eye className="w-3.5 h-3.5" /> 詳細を表示
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-slate-500 block mb-0.5">カード番号</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-sm text-slate-200 tracking-wider">
-                            {revealedCards.has(card.id) ? formatCardNumber(card.number) : maskCardNumber(card.number, card.last4)}
-                          </span>
-                          {revealedCards.has(card.id) && card.number && (
-                            <button
-                              type="button"
-                              onClick={() => handleCopyToClipboard(card.number.replace(/\D/g, ''), `${card.id}:number`)}
-                              className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
-                              title="カード番号をコピー"
-                            >
-                              {copiedField === `${card.id}:number` ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="min-w-0">
-                          <span className="text-[10px] text-slate-500 block mb-0.5">有効期限</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-sm text-slate-200">
-                              {revealedCards.has(card.id) ? (card.expiry || '未登録') : '••/••'}
-                            </span>
-                            {revealedCards.has(card.id) && card.expiry && (
-                              <button
-                                type="button"
-                                onClick={() => handleCopyToClipboard(card.expiry, `${card.id}:expiry`)}
-                                className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
-                                title="有効期限をコピー"
-                              >
-                                {copiedField === `${card.id}:expiry` ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-[10px] text-slate-500 block mb-0.5">セキュリティコード</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-sm text-slate-200">
-                              {revealedCards.has(card.id) ? (card.cvv || '未登録') : '•••'}
-                            </span>
-                            {revealedCards.has(card.id) && card.cvv && (
-                              <button
-                                type="button"
-                                onClick={() => handleCopyToClipboard(card.cvv, `${card.id}:cvv`)}
-                                className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
-                                title="セキュリティコードをコピー"
-                              >
-                                {copiedField === `${card.id}:cvv` ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 詳細設定情報 */}
+                    {/* 詳細設定情報（常に表示。一覧性を保つための最低限の情報） */}
                     <div className="grid grid-cols-3 gap-2 bg-slate-900/50 p-3 rounded-xl text-xs border border-slate-700/40">
                       <div>
                         <span className="text-slate-400 block">利用限度額</span>
@@ -3455,22 +3385,131 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* 補足情報: 引落口座・今年の累計/月平均・変化検知（控えめに1行ずつ） */}
-                    <div className="text-[11px] text-slate-500 space-y-0.5">
-                      {card.bankAccount && (
-                        <p>引落口座: <span className="text-slate-400">{card.bankAccount}</span></p>
-                      )}
-                      <p>
-                        今年の累計 ¥{(cardYearlyStats[card.id]?.total || 0).toLocaleString()}
-                        {' '}・ 月平均 ¥{Math.round(cardYearlyStats[card.id]?.average || 0).toLocaleString()}
-                      </p>
-                      {cardVarianceNotes[card.id] && (
-                        <p>
-                          {cardVarianceNotes[card.id].higher ? '通常より高め' : '通常より少なめ'}
-                          （平均{cardVarianceNotes[card.id].higher ? '+' : ''}{Math.round(cardVarianceNotes[card.id].diffPct)}%）
-                        </p>
-                      )}
-                    </div>
+                    {!isExpanded && (
+                      <button
+                        type="button"
+                        onClick={() => toggleCardExpanded(card.id)}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 font-medium"
+                      >
+                        詳細を見る（カード番号・口座・年間累計など）
+                      </button>
+                    )}
+
+                    {isExpanded && (
+                      <>
+                        {/* カード番号・有効期限・セキュリティコード・名義 */}
+                        <div className="bg-slate-900/50 p-3.5 rounded-xl border border-slate-700/40 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                              <User className="w-3.5 h-3.5" />
+                              {card.holderName || '名義未登録'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleCardReveal(card.id)}
+                              className="flex items-center gap-1 text-[11px] font-medium text-indigo-400 hover:text-indigo-300"
+                            >
+                              {revealedCards.has(card.id) ? (
+                                <>
+                                  <EyeOff className="w-3.5 h-3.5" /> 隠す
+                                </>
+                              ) : (
+                                <>
+                                  <Eye className="w-3.5 h-3.5" /> 詳細を表示
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] text-slate-500 block mb-0.5">カード番号</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-sm text-slate-200 tracking-wider">
+                                {revealedCards.has(card.id) ? formatCardNumber(card.number) : maskCardNumber(card.number, card.last4)}
+                              </span>
+                              {revealedCards.has(card.id) && card.number && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyToClipboard(card.number.replace(/\D/g, ''), `${card.id}:number`)}
+                                  className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
+                                  title="カード番号をコピー"
+                                >
+                                  {copiedField === `${card.id}:number` ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="min-w-0">
+                              <span className="text-[10px] text-slate-500 block mb-0.5">有効期限</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-sm text-slate-200">
+                                  {revealedCards.has(card.id) ? (card.expiry || '未登録') : '••/••'}
+                                </span>
+                                {revealedCards.has(card.id) && card.expiry && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyToClipboard(card.expiry, `${card.id}:expiry`)}
+                                    className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
+                                    title="有効期限をコピー"
+                                  >
+                                    {copiedField === `${card.id}:expiry` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <span className="text-[10px] text-slate-500 block mb-0.5">セキュリティコード</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-sm text-slate-200">
+                                  {revealedCards.has(card.id) ? (card.cvv || '未登録') : '•••'}
+                                </span>
+                                {revealedCards.has(card.id) && card.cvv && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopyToClipboard(card.cvv, `${card.id}:cvv`)}
+                                    className="p-1 text-slate-500 hover:text-indigo-400 shrink-0"
+                                    title="セキュリティコードをコピー"
+                                  >
+                                    {copiedField === `${card.id}:cvv` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 補足情報: 引落口座・今年の累計/月平均・変化検知（控えめに1行ずつ） */}
+                        <div className="text-[11px] text-slate-500 space-y-0.5">
+                          {card.bankAccount && (
+                            <p>引落口座: <span className="text-slate-400">{card.bankAccount}</span></p>
+                          )}
+                          <p>
+                            今年の累計 ¥{(cardYearlyStats[card.id]?.total || 0).toLocaleString()}
+                            {' '}・ 月平均 ¥{Math.round(cardYearlyStats[card.id]?.average || 0).toLocaleString()}
+                          </p>
+                          {cardVarianceNotes[card.id] && (
+                            <p>
+                              {cardVarianceNotes[card.id].higher ? '通常より高め' : '通常より少なめ'}
+                              （平均{cardVarianceNotes[card.id].higher ? '+' : ''}{Math.round(cardVarianceNotes[card.id].diffPct)}%）
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -3506,7 +3545,7 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-semibold text-white text-sm truncate">{method.name}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">
+                            <p className="text-xs text-slate-500 mt-0.5 truncate">
                               {PAYMENT_METHOD_TYPE_LABELS[method.type] || 'その他'}
                             </p>
                           </div>
@@ -3564,7 +3603,7 @@ export default function App() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-semibold text-white text-sm truncate">{template.name}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">
+                            <p className="text-xs text-slate-500 mt-0.5 truncate">
                               毎月{dayLabel} ・ {getPaymentLabel(template)}
                             </p>
                           </div>
