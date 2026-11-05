@@ -141,14 +141,42 @@ function checkCardEmails() {
         const subject = message.getSubject() || '';
         try {
           const body = message.getPlainBody();
+          const messageDate = message.getDate();
+          const messageTime = messageDate.getTime();
           // AIの役割は抽出だけ。登録してよいかどうかは evaluateForImport_ が判断する。
-          const extracted = extractEmailInfo_(geminiKey, subject, body, existingCards, existingDebitMethods, message.getDate());
+          const extracted = extractEmailInfo_(geminiKey, subject, body, existingCards, existingDebitMethods, messageDate);
           // 無料枠のレート制限（1分あたり◯リクエスト）に極力引っかからないよう、
           // 判定1回ごとに少し間隔を空ける。
           Utilities.sleep(3200);
 
           if (extracted.status === 'not_purchase') {
-            console.log(`AI判定: 利用確定通知ではない → スキップ: "${subject}"`);
+            // AIが「購入通知ではない」と判定した場合でも、本文に「ご利用のお知らせ」等の
+            // 利用通知特有の文言（USAGE_PHRASE_PATTERN）が実際にはある場合、AI側の誤判定
+            // （見慣れないメール文面・AI応答の揺れ等）の可能性がある。一度ここで
+            // processedMessageIdsに記録すると、以後このメッセージは二度と再評価されない
+            // ため、無条件に捨てず念のため確認待ちに回す（捨てるのはAIが明確に
+            // 「利用通知ではない」と判定でき、かつ機械的な安全網にも引っかからない場合のみ）。
+            const looksLikeUsageNotice = USAGE_PHRASE_PATTERN.test(`${subject}\n${body}`);
+            if (looksLikeUsageNotice) {
+              console.warn(`AI判定: 利用確定通知ではないが、文面に利用通知らしい文言があるため念のため確認待ちに回します: "${subject}"`);
+              upsertPendingImport_(accessToken, `p-gmail-${messageId}-0`, {
+                subject,
+                from: message.getFrom() || '',
+                receivedAt: messageDate.toISOString(),
+                amount: null,
+                date: null,
+                merchant: null,
+                issuerNameGuess: null,
+                last4Guess: null,
+                category: null,
+                reason: 'AIは購入通知ではないと判定しましたが、本文に利用通知らしい文言が含まれていたため、念のため確認待ちにしています',
+                status: 'pending',
+                createdAt: new Date().toISOString(),
+              });
+              pendingCount += 1;
+            } else {
+              console.log(`AI判定: 利用確定通知ではない → スキップ: "${subject}"`);
+            }
             processedMessageIds[messageId] = Date.now();
             processedMessageIdsChanged = true;
             return; // このメール自体は「処理済み」として扱ってよい（threadHadFailureにはしない）
@@ -164,9 +192,6 @@ function checkCardEmails() {
           // （再実行してもGemini呼び出しをスキップできるようにするため）。
           processedMessageIds[messageId] = Date.now();
           processedMessageIdsChanged = true;
-
-          const messageDate = message.getDate();
-          const messageTime = messageDate.getTime();
 
           // 「ご利用明細のお知らせ」のように1通に複数明細が入っていることがあるので、
           // 明細ごとに判定・登録する。1件しかない通常のメールも要素数1の配列として
@@ -379,11 +404,12 @@ function fetchGeminiWithRetry_(url, payload, attempt) {
 
   // 1回あたりの待ちを短く抑える（長く待っても実行時間予算を圧迫するだけなので、
   // 待つのは最大1回・上限20秒まで。それでもダメならこのメールは今回諦めて
-  // 次回のトリガー実行に回す）。
-  if (code === 429 && attempt <= 1) {
+  // 次回のトリガー実行に回す）。429はレート制限、503はモデル混雑による一時的な
+  // エラーで、どちらも少し待てば解消することが多いため同様に再試行する。
+  if ((code === 429 || code === 503) && attempt <= 1) {
     const m = text.match(/retry in ([\d.]+)s/i);
     const waitSec = Math.min(m ? Math.ceil(parseFloat(m[1])) : 15, 20);
-    console.warn(`Gemini APIのレート制限(429)。${waitSec}秒待って再試行します（${attempt}回目）`);
+    console.warn(`Gemini APIの一時的なエラー(${code})。${waitSec}秒待って再試行します（${attempt}回目）`);
     Utilities.sleep(waitSec * 1000);
     return fetchGeminiWithRetry_(url, payload, attempt + 1);
   }
@@ -1058,4 +1084,46 @@ function debugSearch() {
       console.log(`対象: "${subject}"`);
     });
   });
+}
+
+// ============================================================
+// 【トラブル対応用】何らかの理由（AIの誤判定・AI側の一時的なエラー等）で、
+// 本来取り込まれるべきメールが「判定済み」として記録されてしまい、以後
+// checkCardEmailsを何度実行しても二度と再評価されなくなってしまった場合に
+// 使う。削除・登録は一切せず、「判定済み」の記録を外すだけなので、実行しても
+// 安全（外した結果、次回のcheckCardEmails実行時に改めてAI判定からやり直される
+// だけで、間違って二重登録されたりはしない）。
+//
+// 使い方:
+//   1. 下のqueryを、再評価したい対象のメールだけに絞り込めるGmail検索演算子に
+//      書き換える（対象を広げすぎるとAI呼び出しが無駄に増えるだけなので、
+//      件名の一部・送信元・日付などでできるだけ絞り込むこと）。
+//      例: 'from:smbc-card.com subject:"ご利用のお知らせ" after:2026/11/02 before:2026/11/04'
+//   2. 上のプルダウンで checkCardEmails ではなく resetStuckMessages を選んで実行。
+//   3. 実行ログに「対象: 1件」のように表示されるので件数を確認。
+//   4. そのあと改めて checkCardEmails を実行すると、対象のメールが再度AI判定される。
+// ============================================================
+function resetStuckMessages() {
+  const query = 'ここに対象メールを絞り込むGmail検索演算子を入力';
+  const accessToken = getFirestoreAccessToken_();
+  const processedMessageIds = getProcessedMessageIds_(accessToken);
+  const threads = GmailApp.search(query, 0, 20);
+  console.log(`検索クエリ: ${query}`);
+  console.log(`対象スレッド数: ${threads.length}件`);
+
+  let cleared = 0;
+  threads.forEach((thread) => {
+    thread.getMessages().forEach((message) => {
+      const id = message.getId();
+      const wasRecorded = !!processedMessageIds[id];
+      console.log(`対象: "${message.getSubject()}" (${message.getDate()}) → 記録解除${wasRecorded ? '' : '（もともと記録なし）'}`);
+      if (wasRecorded) {
+        delete processedMessageIds[id];
+        cleared += 1;
+      }
+    });
+  });
+
+  saveProcessedMessageIds_(accessToken, processedMessageIds);
+  console.log(`解除件数: ${cleared}件。このあと checkCardEmails を実行すると、これらのメールは改めてAI判定されます。`);
 }
