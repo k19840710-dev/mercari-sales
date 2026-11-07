@@ -1087,43 +1087,19 @@ function debugSearch() {
 }
 
 // ============================================================
-// 【トラブル対応用】何らかの理由（AIの誤判定・AI側の一時的なエラー等）で、
-// 本来取り込まれるべきメールが「判定済み」として記録されてしまい、以後
-// checkCardEmailsを何度実行しても二度と再評価されなくなってしまった場合に
-// 使う。削除・登録は一切せず、「判定済み」の記録を外すだけなので、実行しても
-// 安全（外した結果、次回のcheckCardEmails実行時に改めてAI判定からやり直される
-// だけで、間違って二重登録されたりはしない）。
+// 【トラブル対応用】明細の取りこぼしに気づいたとき、何も編集せずそのまま
+// プルダウンでこの関数を選んで実行するだけでよい復旧用の関数。
+// 「このメールはもう判定済み」という記録を全部消すだけで、削除・登録は一切
+// しないので安全（次回 checkCardEmails を実行した時に、直近7日分のメールが
+// 全部改めてAI判定からやり直されるだけ。既に登録済みの明細は重複登録防止の
+// 仕組みがあるので、重複して増えたりはしない）。
 //
-// 使い方:
-//   1. 下のqueryを、再評価したい対象のメールだけに絞り込めるGmail検索演算子に
-//      書き換える（対象を広げすぎるとAI呼び出しが無駄に増えるだけなので、
-//      件名の一部・送信元・日付などでできるだけ絞り込むこと）。
-//      例: 'from:smbc-card.com subject:"ご利用のお知らせ" after:2026/11/02 before:2026/11/04'
-//   2. 上のプルダウンで checkCardEmails ではなく resetStuckMessages を選んで実行。
-//   3. 実行ログに「対象: 1件」のように表示されるので件数を確認。
-//   4. そのあと改めて checkCardEmails を実行すると、対象のメールが再度AI判定される。
+// 使い方: プルダウンで checkCardEmails ではなく resetAllProcessedMessages を
+// 選んで実行するだけ（queryの書き換えは不要）。そのあと改めて
+// checkCardEmails を実行すると、直近7日分のメールがすべて再判定される。
 // ============================================================
-function resetStuckMessages() {
-  const query = 'ここに対象メールを絞り込むGmail検索演算子を入力';
+function resetAllProcessedMessages() {
   const accessToken = getFirestoreAccessToken_();
-  const processedMessageIds = getProcessedMessageIds_(accessToken);
-  const threads = GmailApp.search(query, 0, 20);
-  console.log(`検索クエリ: ${query}`);
-  console.log(`対象スレッド数: ${threads.length}件`);
-
-  let cleared = 0;
-  threads.forEach((thread) => {
-    thread.getMessages().forEach((message) => {
-      const id = message.getId();
-      const wasRecorded = !!processedMessageIds[id];
-      console.log(`対象: "${message.getSubject()}" (${message.getDate()}) → 記録解除${wasRecorded ? '' : '（もともと記録なし）'}`);
-      if (wasRecorded) {
-        delete processedMessageIds[id];
-        cleared += 1;
-      }
-    });
-  });
-
-  saveProcessedMessageIds_(accessToken, processedMessageIds);
-  console.log(`解除件数: ${cleared}件。このあと checkCardEmails を実行すると、これらのメールは改めてAI判定されます。`);
+  saveProcessedMessageIds_(accessToken, {});
+  console.log('「判定済み」の記録を全て消去しました。このあと checkCardEmails を実行すると、直近7日分のメールが全部改めてAI判定されます。');
 }
