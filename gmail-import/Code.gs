@@ -156,7 +156,7 @@ function checkCardEmails() {
             // processedMessageIdsに記録すると、以後このメッセージは二度と再評価されない
             // ため、無条件に捨てず念のため確認待ちに回す（捨てるのはAIが明確に
             // 「利用通知ではない」と判定でき、かつ機械的な安全網にも引っかからない場合のみ）。
-            const looksLikeUsageNotice = USAGE_PHRASE_PATTERN.test(`${subject}\n${body}`);
+            const looksLikeUsageNotice = STRICT_USAGE_NOTICE_PATTERN.test(`${subject}\n${body}`);
             if (looksLikeUsageNotice) {
               console.warn(`AI判定: 利用確定通知ではないが、文面に利用通知らしい文言があるため念のため確認待ちに回します: "${subject}"`);
               upsertPendingImport_(accessToken, `p-gmail-${messageId}-0`, {
@@ -609,6 +609,16 @@ function extractEmailInfo_(apiKey, subject, body, existingCards, existingDebitMe
 // 複数明細をまとめた「ご利用明細のお知らせ」（「ご利用のお知らせ」と表現が近いだけで
 // 別フレーズなのでこの安全網には別途含めている）も通す必要がある。
 const USAGE_PHRASE_PATTERN = /(ご利用がありました|ご利用(明細)?のお知らせ|利用速報|ご利用いただき|ご利用金額|カードのご利用|(の|で)(お)?支払いが?ありました|決済されました|決済が完了|お支払い(の)?確認|ショッピング利用|返金がありました|ご利用分の返金|返金いたしました|返金が完了)/;
+
+// AIが「購入通知ではない」と判定した際の誤判定セーフティネット（下記参照）専用の、
+// より限定的なパターン。USAGE_PHRASE_PATTERNは「本当に購入通知かどうか」の最終
+// チェック用に意図的に広めの言い回しを含めているため、そのままセーフティネットにも
+// 流用すると、カード利用とは無関係なメール（「お支払いの確認」「ご利用金額」等の
+// 表現を含む会員登録・サブスク系メール等）まで大量に確認待ちへ回ってしまう。
+// 実際に問題（AIの誤判定でメールが永久に見逃される）が起きたのは「ご利用のお知らせ」
+// 「ご利用明細のお知らせ」という、カード会社の利用通知に特有のテンプレート件名の
+// ケースに限られるため、セーフティネットの対象もそこだけに絞る。
+const STRICT_USAGE_NOTICE_PATTERN = /(ご利用のお知らせ|ご利用明細のお知らせ)/;
 
 // 「三井住友カードOliveフレキシブルペイ」のように、同じ1枚の物理カードが
 // クレジットモード／デビットモードを切り替えて使える商品があり、通知メールの

@@ -510,6 +510,21 @@ function formatSignedYen(amount) {
   return n < 0 ? `−¥${Math.abs(n).toLocaleString()}` : `¥${n.toLocaleString()}`;
 }
 
+// 同じ日付の明細同士を並べる際に使う、実際の時刻の目安（ミリ秒）。
+// Gmail取込みはメール受信時刻（gmailReceivedAt）を持っているのでそれを使う。
+// 手動入力・OCR取込みは時刻を持たないが、ドキュメントIDが `t-<作成時刻のミリ秒>...`
+// という形式で作成されているため、そこから作成時刻を復元できる（gmail-import/Code.gs
+// が作る `t-gmail-...` 形式のIDはこの正規表現にマッチしないので対象外）。
+// どちらの手がかりも無い場合は0を返し、並び順の末尾に回す。
+function getTransactionOrderingTime(tx) {
+  if (tx.gmailReceivedAt) {
+    const time = new Date(tx.gmailReceivedAt).getTime();
+    if (!Number.isNaN(time)) return time;
+  }
+  const match = /^t-(\d+)/.exec(tx.id || '');
+  return match ? Number(match[1]) : 0;
+}
+
 // 日本語カテゴリ名 → カテゴリID の対応表（インポート時に使用）
 const CATEGORY_NAME_TO_ID = CATEGORIES.reduce((map, c) => {
   map[c.name] = c.id;
@@ -1606,7 +1621,14 @@ export default function App() {
       const haystack = `${t.merchant || ''} ${t.memo || ''}`.toLowerCase();
       const matchQuery = !query || haystack.includes(query);
       return matchCard && matchCat && matchPm && matchFrom && matchTo && matchMin && matchMax && matchQuery;
-    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+    }).sort((a, b) => {
+      const dateDiff = new Date(b.date) - new Date(a.date);
+      if (dateDiff !== 0) return dateDiff;
+      // 同じ日付の明細同士は、Gmail取込みなら実際のメール受信時刻、手動入力・
+      // OCR取込みならドキュメントID（t-<作成時刻のミリ秒>...）に埋め込まれた
+      // 作成時刻の新しい順に並べる。どちらも持たない明細は末尾に回る。
+      return getTransactionOrderingTime(b) - getTransactionOrderingTime(a);
+    });
   }, [
     monthlyTransactions, transactions, filterCardId, filterCategory, filterPaymentMethodId,
     filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax, searchQuery,
@@ -2901,12 +2923,6 @@ export default function App() {
                     const paymentLabel = getPaymentLabel(tx);
                     const categoryObj = CATEGORIES.find((c) => c.id === tx.category) || CATEGORIES[CATEGORIES.length - 1];
                     const IconComponent = categoryObj.icon;
-                    // Gmail取込みの明細だけ、受信時刻（gmailReceivedAt）から時刻を出せる。
-                    // 手動入力等は時刻を持たないので日付だけ表示する。
-                    const receivedTime = tx.gmailReceivedAt ? new Date(tx.gmailReceivedAt) : null;
-                    const timeLabel = receivedTime
-                      ? ` ${String(receivedTime.getHours()).padStart(2, '0')}:${String(receivedTime.getMinutes()).padStart(2, '0')}`
-                      : '';
 
                     return (
                       <div
@@ -2928,7 +2944,7 @@ export default function App() {
                               )}
                             </p>
                             <div className="text-xs text-slate-400 mt-0.5 leading-relaxed">
-                              <div>{tx.date}{timeLabel}</div>
+                              <div>{tx.date}</div>
                               <div className="text-slate-300 font-medium truncate">{paymentLabel}</div>
                             </div>
                           </div>
