@@ -39,6 +39,7 @@ import {
   Loader2,
   Inbox,
   BarChart3,
+  BookOpen,
 } from 'lucide-react';
 import TrendChart from './components/TrendChart.jsx';
 import DonutChart from './components/DonutChart.jsx';
@@ -131,6 +132,7 @@ const CATEGORIES = [
   { id: 'beauty', name: '美容', icon: Sparkles, color: 'bg-rose-500 text-rose-500' },
   { id: 'social', name: '交際費', icon: Users, color: 'bg-orange-500 text-orange-500' },
   { id: 'entertainment', name: '娯楽・趣味', icon: Tv, color: 'bg-pink-500 text-pink-500' },
+  { id: 'manga', name: '漫画', icon: BookOpen, color: 'bg-fuchsia-500 text-fuchsia-500' },
   { id: 'transport', name: '交通費', icon: Car, color: 'bg-emerald-500 text-emerald-500' },
   { id: 'travel', name: '旅行', icon: Plane, color: 'bg-sky-500 text-sky-500' },
   { id: 'communication', name: '通信費', icon: Smartphone, color: 'bg-violet-500 text-violet-500' },
@@ -156,7 +158,8 @@ const CATEGORY_KEYWORDS = [
   ['procurement', ['アリエクスプレス', 'AliExpress', 'Ali Express', 'タオバオ', 'Taobao', '1688', 'Pinduoduo', '拼多多', 'Temu', 'SHEIN', '速卖通']],
   ['beauty', ['美容院', 'ヘアサロン', '理容', 'ネイル', 'エステ', 'まつげ', 'コスメ', '化粧品', '資生堂', 'Shiseido', 'アットコスメ', '脱毛']],
   ['social', ['ギフト', '贈り物', '贈答', 'ご祝儀', 'お祝い', 'プレゼント', '冠婚葬祭', '香典']],
-  ['entertainment', ['映画', '遊園地', 'ゲーム', 'カラオケ', 'ライブ', 'ジム', 'シネマ', 'ディズニー', 'USJ', 'Switch', 'PlayStation', 'Steam', 'コミック', '漫画', 'シーモア', '電子書籍', 'Kindle', 'ebookjapan', 'DMM', 'FANZA', 'ニコニコ']],
+  ['entertainment', ['映画', '遊園地', 'ゲーム', 'カラオケ', 'ライブ', 'ジム', 'シネマ', 'ディズニー', 'USJ', 'Switch', 'PlayStation', 'Steam', 'DMM', 'FANZA', 'ニコニコ']],
+  ['manga', ['コミック', '漫画', 'まんが', 'シーモア', '電子書籍', 'Kindle', 'ebookjapan', 'めちゃコミック', 'ジャンプ+']],
   ['travel', ['JTB', 'HIS', 'エイチ・アイ・エス', '楽天トラベル', 'じゃらん', 'Booking', 'Expedia', 'Airbnb', 'エアビーアンドビー', 'ホテル', '旅館', '民宿']],
   ['communication', ['povo', 'ｐｏｖｏ', 'ドコモ', 'ａｕ', 'ソフトバンク', 'モバイル', 'ﾓﾊﾞｲﾙ', 'ワイモバイル', 'UQ', 'NHK', 'Wi-Fi', 'ネット', '楽天モバイル']],
   ['subscription', ['サブスク', '月額', 'Netflix', 'Spotify', 'プライム', 'Amazon Prime', 'Hulu', 'U-NEXT', 'ユーネクスト', 'Abema', 'Disney', 'ディズニープラス', 'Apple Music', 'Apple One', 'iCloud', 'Adobe', 'YouTube Premium', 'ユーチューブプレミアム']],
@@ -193,9 +196,9 @@ const KNOWN_MERCHANTS = [
   { match: 'ali express', name: 'AliExpress', category: 'procurement' },
   { match: 'taobao', name: 'Taobao', category: 'procurement' },
   { match: 'temu', name: 'Temu', category: 'procurement' },
-  { match: 'シーモア', name: 'コミックシーモア', category: 'entertainment' },
-  { match: 'kindle', name: 'Kindle', category: 'entertainment' },
-  { match: 'ebookjapan', name: 'ebookJapan', category: 'entertainment' },
+  { match: 'シーモア', name: 'コミックシーモア', category: 'manga' },
+  { match: 'kindle', name: 'Kindle', category: 'manga' },
+  { match: 'ebookjapan', name: 'ebookJapan', category: 'manga' },
   { match: 'cycling', name: 'Hello Cycling', category: 'transport' },
   { match: 'chargespot', name: 'ChargeSPOT', category: 'other' },
   { match: 'suica', name: 'Suica', category: 'transport' },
