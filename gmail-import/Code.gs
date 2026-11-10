@@ -156,7 +156,12 @@ function checkCardEmails() {
             // processedMessageIdsに記録すると、以後このメッセージは二度と再評価されない
             // ため、無条件に捨てず念のため確認待ちに回す（捨てるのはAIが明確に
             // 「利用通知ではない」と判定でき、かつ機械的な安全網にも引っかからない場合のみ）。
-            const looksLikeUsageNotice = STRICT_USAGE_NOTICE_PATTERN.test(`${subject}\n${body}`);
+            // 本文全体を対象にすると、無関係なメール（クリニックの予約確認等）の
+            // フッターや定型文に偶然「ご利用のお知らせ」という文字列が部分的に
+            // 含まれているだけで誤検知してしまうことが実際に起きた。カード会社の
+            // 利用通知は件名が必ずこのテンプレートになっているため、件名だけを
+            // 対象にすることで誤検知を防ぐ。
+            const looksLikeUsageNotice = STRICT_USAGE_NOTICE_PATTERN.test(subject);
             if (looksLikeUsageNotice) {
               console.warn(`AI判定: 利用確定通知ではないが、文面に利用通知らしい文言があるため念のため確認待ちに回します: "${subject}"`);
               upsertPendingImport_(accessToken, `p-gmail-${messageId}-0`, {
