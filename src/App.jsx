@@ -1187,6 +1187,10 @@ export default function App() {
       entry.items.push(t);
       map.set(t.date, entry);
     });
+    // 明細タブの並び順（同じ日付内はGmail受信時刻／入力時刻の新しい順）と揃える。
+    map.forEach((entry) => {
+      entry.items.sort((a, b) => getTransactionOrderingTime(b) - getTransactionOrderingTime(a));
+    });
     return map;
   }, [monthlyTransactions]);
 
